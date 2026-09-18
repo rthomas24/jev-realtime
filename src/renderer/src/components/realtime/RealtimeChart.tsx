@@ -2,7 +2,7 @@ import type { JSX, ReactNode } from 'react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Position } from '@shared/ledger'
 import { money } from '@shared/ledger'
-import { REALTIME_RULE_LABEL, type RealtimeDecision, type RealtimeExit, type RealtimeTick } from '@shared/realtimeAgents'
+import { realtimeRuleLabel, type RealtimeDecision, type RealtimeExit, type RealtimeTick } from '@shared/realtimeAgents'
 import type { PricePoint } from '@renderer/store/realtimeStore'
 import { cn, clockTime, signedMoney } from '@renderer/lib/format'
 import { smoothPath } from './smooth'
@@ -218,7 +218,7 @@ export function RealtimeChart({
     const ty = Math.min(Math.max(model.fy(s.p) - 92, PAD_TOP - 46), model.base - 82)
     const hit = byTime.get(s.t)
     const kind = kindOf(hit?.d)
-    const line3 = hit?.d.fill ? `${hit.d.fill.side === 'buy' ? 'BOUGHT' : 'SOLD'} ${hit.d.fill.qty} @ ${fmt(hit.d.fill.price)}` : hit ? REALTIME_RULE_LABEL[hit.d.rule] : 'price sample'
+    const line3 = hit?.d.fill ? `${hit.d.fill.side === 'buy' ? 'BOUGHT' : 'SOLD'} ${hit.d.fill.qty} @ ${fmt(hit.d.fill.price)}` : hit ? realtimeRuleLabel(hit.d.rule) : 'price sample'
     return {
       x,
       y: model.fy(s.p),
@@ -364,7 +364,7 @@ export function RealtimeChart({
             </div>
             <div className="flex justify-end gap-3 mt-1.5 text-xs text-muted nums whitespace-nowrap">
               <span>{latest?.tick.latencyMs !== undefined ? `${Math.round(latest.tick.latencyMs)} ms` : latest ? 'no model call' : '—'}</span>
-              <span>{conf !== null ? `conf ${conf.toFixed(2)}` : latest ? REALTIME_RULE_LABEL[latest.d.rule].toLowerCase() : ''}</span>
+              <span>{conf !== null ? `conf ${conf.toFixed(2)}` : latest ? realtimeRuleLabel(latest.d.rule).toLowerCase() : ''}</span>
               {latest?.d.verdict?.reversal !== undefined && <span>reversal {Math.round(latest.d.verdict.reversal * 100)}%</span>}
             </div>
           </div>

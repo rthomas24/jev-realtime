@@ -18,7 +18,7 @@
  */
 import { emptyLedger } from '@shared/ledger'
 import { etDateTime } from '@shared/marketTime'
-import { clampRealtimeGuardrails, emptyRealtimeState, normCryptoSymbol, normRealtimeSymbols, realtimeConfigProblem, realtimeUsage, REALTIME_DEFAULTS, REALTIME_JEV_USD_PER_MTOK_INPUT, sumRealtimeUsage, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
+import { realtimeRuleLabel, clampRealtimeGuardrails, emptyRealtimeState, normCryptoSymbol, normRealtimeSymbols, realtimeConfigProblem, realtimeUsage, REALTIME_DEFAULTS, REALTIME_JEV_USD_PER_MTOK_INPUT, sumRealtimeUsage, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
 import type { Decider } from '@core/realtime/jev'
 import { entriesClosed, entrySize, exitTrigger, newExit, verdictIntent } from '@core/realtime/policy'
 import { buildSituation } from '@core/realtime/situation'
@@ -271,6 +271,17 @@ async function main(): Promise<void> {
     const nextDay = await run(s4.state, etDateTime('2026-09-17', 10 * 60), [q('NVDA', 101), q('AAPL', 201)], jev)
     check('the day roll resets today, keeps all time', nextDay.state.dayModelCalls === 1 && nextDay.state.dayInputTokens === 500 && nextDay.state.modelCalls === 4 && nextDay.state.dayModelSkips === 0 && nextDay.state.modelSkips === 1, JSON.stringify(realtimeUsage(nextDay.state)))
     check('clampRealtimeGuardrails defaults the band for configs written before it existed', clampRealtimeGuardrails({}).askMinMovePct === 0.02 && clampRealtimeGuardrails({}).askAtLeastEverySec === 10 && clampRealtimeGuardrails({ askMinMovePct: -1, askAtLeastEverySec: 0 }).askMinMovePct === 0 && clampRealtimeGuardrails({ askAtLeastEverySec: 0 }).askAtLeastEverySec === 1)
+  }
+
+  console.log('\n— labels outlive the rules —')
+  {
+    check('a live rule keeps its phrase', realtimeRuleLabel('jev.buy') === 'Model said buy')
+    // A tick log written before a rule was retired still names it, and the row must still render.
+    check(
+      'a retired rule reads as its own last segment instead of crashing the page',
+      realtimeRuleLabel('entry.cooldown') === 'Cooldown' && realtimeRuleLabel('lock.somethingNew') === 'Something new' && realtimeRuleLabel('weird') === 'Weird',
+      [realtimeRuleLabel('entry.cooldown'), realtimeRuleLabel('lock.somethingNew'), realtimeRuleLabel('weird')].join(' / ')
+    )
   }
 
   console.log('\n— the pure rules —')

@@ -261,6 +261,21 @@ export const REALTIME_RULE_LABEL: Record<RealtimeRule, string> = {
   'quiet.band': 'Barely moved'
 }
 
+/**
+ * The phrase for a rule, from a tick that may be older than the rule set.
+ * A retired rule (one dropped from `RealtimeRule`) still sits in every tick
+ * log already written, so a lookup that assumed a label would crash the page
+ * on a log the app itself wrote last week. Unknown rules read as their own
+ * last segment instead.
+ */
+export function realtimeRuleLabel(rule: RealtimeRule | string): string {
+  const known = REALTIME_RULE_LABEL[rule as RealtimeRule]
+  if (known) return known
+  const tail = String(rule).split('.').pop() || String(rule)
+  const words = tail.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 export interface RealtimeDecision {
   symbol: string
   /** The last price the decision was made against; null when unpriced. */
@@ -497,6 +512,6 @@ export function sumRealtimeUsage(states: readonly RealtimeUsageCounters[]): Real
 /** One line per decision for the tape: "NVDA · Model said buy · filled 1.2 @ $182.40". */
 export function describeRealtimeDecision(d: RealtimeDecision): string {
   const px = d.price !== null ? ` @ ${money(d.price)}` : ''
-  if (d.fill) return `${d.symbol} · ${REALTIME_RULE_LABEL[d.rule]} · ${d.fill.side === 'buy' ? 'bought' : 'sold'} ${d.fill.qty} @ ${money(d.fill.price)}${d.econ?.realized !== undefined ? ` (${d.econ.realized >= 0 ? '+' : ''}${money(d.econ.realized)})` : ''}`
-  return `${d.symbol} · ${REALTIME_RULE_LABEL[d.rule]}${px} · ${d.detail}`
+  if (d.fill) return `${d.symbol} · ${realtimeRuleLabel(d.rule)} · ${d.fill.side === 'buy' ? 'bought' : 'sold'} ${d.fill.qty} @ ${money(d.fill.price)}${d.econ?.realized !== undefined ? ` (${d.econ.realized >= 0 ? '+' : ''}${money(d.econ.realized)})` : ''}`
+  return `${d.symbol} · ${realtimeRuleLabel(d.rule)}${px} · ${d.detail}`
 }

@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { money } from '@shared/ledger'
-import { isContinuousMarket, REALTIME_RULE_LABEL, realtimeModelCostUsd, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
+import { isContinuousMarket, realtimeRuleLabel, realtimeModelCostUsd, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
 import { cn, compactNumber, relTime, signedMoney, usd } from '@renderer/lib/format'
 
 /**
@@ -173,7 +173,7 @@ function chainFor(src: DecisionAt, g: RealtimeGuardrails): Chain {
   const { d } = src
   const v = d.verdict
   const outcomeTone: Tone = d.fill ? (d.fill.side === 'buy' ? 'up' : 'down') : d.outcome === 'blocked' ? 'warn' : d.outcome === 'error' ? 'down' : 'muted'
-  if (!v) return { gates: [], word: d.fill ? (d.fill.side === 'buy' ? 'BUY' : 'SELL') : REALTIME_RULE_LABEL[d.rule].toUpperCase(), tone: outcomeTone, rule: d.fill ? REALTIME_RULE_LABEL[d.rule] : undefined }
+  if (!v) return { gates: [], word: d.fill ? (d.fill.side === 'buy' ? 'BUY' : 'SELL') : realtimeRuleLabel(d.rule).toUpperCase(), tone: outcomeTone, rule: d.fill ? realtimeRuleLabel(d.rule) : undefined }
   const p = (a: RealtimeAction): number => v.probabilities[a] ?? 0
   const held = v.reversal !== undefined || v.trendIntact !== undefined
   const gates: Gate[] = []
@@ -187,7 +187,7 @@ function chainFor(src: DecisionAt, g: RealtimeGuardrails): Chain {
     if (v.trendIntact !== undefined) gate('intact', pct(v.trendIntact), `> ${pct(1 - g.sellThreshold)}`, v.trendIntact > 1 - g.sellThreshold)
     gate('down', pct(p('sell')), `< ${pct(g.sellThreshold)}`, p('sell') < g.sellThreshold)
     const sold = !open
-    return { gates, word: sold ? 'SELL' : 'HOLD', tone: sold ? (d.fill ? 'down' : outcomeTone) : 'text', rule: d.fill ? undefined : sold ? REALTIME_RULE_LABEL[d.rule] : undefined }
+    return { gates, word: sold ? 'SELL' : 'HOLD', tone: sold ? (d.fill ? 'down' : outcomeTone) : 'text', rule: d.fill ? undefined : sold ? realtimeRuleLabel(d.rule) : undefined }
   }
   gate('up', pct(p('buy')), `≥ ${pct(g.buyThreshold)}`, p('buy') >= g.buyThreshold)
   if (v.extended !== undefined) gate('extended', pct(v.extended), `< ${pct(g.maxExtended)}`, v.extended < g.maxExtended)
@@ -195,7 +195,7 @@ function chainFor(src: DecisionAt, g: RealtimeGuardrails): Chain {
   if (!open) return { gates, word: 'HOLD', tone: 'text' }
   // Every model gate passed: the engine's own rules had the last word.
   if (d.fill) return { gates, word: 'BUY', tone: 'up' }
-  return { gates, word: d.outcome === 'blocked' ? 'HELD' : 'HOLD', tone: outcomeTone, rule: REALTIME_RULE_LABEL[d.rule] }
+  return { gates, word: d.outcome === 'blocked' ? 'HELD' : 'HOLD', tone: outcomeTone, rule: realtimeRuleLabel(d.rule) }
 }
 
 function GateChain({ chain, id }: { chain: Chain; id: string }): JSX.Element {
@@ -236,7 +236,7 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
   const chainSrc = latest && !QUIET.has(latest.d.rule) ? latest : judged
   const chain = chainSrc ? chainFor(chainSrc, g) : null
   const headlineDecision = chainSrc?.d ?? null
-  const headline = headlineDecision?.fill ? (headlineDecision.fill.side === 'buy' ? 'BUY' : 'SELL') : v ? DIRECTION[v.action].toUpperCase() : headlineDecision ? REALTIME_RULE_LABEL[headlineDecision.rule].toUpperCase() : '—'
+  const headline = headlineDecision?.fill ? (headlineDecision.fill.side === 'buy' ? 'BUY' : 'SELL') : v ? DIRECTION[v.action].toUpperCase() : headlineDecision ? realtimeRuleLabel(headlineDecision.rule).toUpperCase() : '—'
   const headlineColor = headlineDecision?.fill ? (headlineDecision.fill.side === 'buy' ? 'var(--color-up)' : 'var(--color-down)') : v ? COLOR[v.action] : headlineDecision?.outcome === 'blocked' ? WARN : 'var(--color-muted)'
   const headlinePct = useRolling(v ? (v.probabilities[v.action] ?? 0) : 0)
   const offered = v ? ORDER.filter((a) => v.probabilities[a] !== undefined) : []
@@ -279,7 +279,7 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
           {standing && latest && (
             <span className="text-warn">
               {' '}
-              · standing — {REALTIME_RULE_LABEL[latest.d.rule].toLowerCase()} {relTime(latest.tick.at)}
+              · standing — {realtimeRuleLabel(latest.d.rule).toLowerCase()} {relTime(latest.tick.at)}
             </span>
           )}
         </div>
@@ -374,7 +374,7 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
             <GateChain chain={chain} id={chainSrc!.tick.id} />
             {chainSrc && (
               <p className={cn('text-xs mt-2 leading-snug', chainSrc.d.outcome === 'blocked' ? 'text-warn' : chainSrc.d.outcome === 'error' ? 'text-down' : 'text-muted')}>
-                <span className="font-medium">{REALTIME_RULE_LABEL[chainSrc.d.rule]}</span> · {chainSrc.d.detail}
+                <span className="font-medium">{realtimeRuleLabel(chainSrc.d.rule)}</span> · {chainSrc.d.detail}
               </p>
             )}
           </div>

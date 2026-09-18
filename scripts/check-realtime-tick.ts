@@ -10,12 +10,15 @@
  *   - the answers are read back by the ids the situation handed out, never by parsing keys
  *   - a crypto agent (continuous market) decides at any hour, never flattens, has no entry
  *     window, settles at once, and describes itself to the model without a bell
+ *   - the quiet band: a tape that moved less than the noise since the model last saw it,
+ *     with the same symbols held, inside the re-ask window, is answered from the last
+ *     verdict — no call, no tokens; the bill is kept per day and all time
  *
  * Run: `npm run check`
  */
 import { emptyLedger } from '@shared/ledger'
 import { etDateTime } from '@shared/marketTime'
-import { clampRealtimeGuardrails, emptyRealtimeState, normCryptoSymbol, normRealtimeSymbols, realtimeConfigProblem, REALTIME_DEFAULTS, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
+import { clampRealtimeGuardrails, emptyRealtimeState, normCryptoSymbol, normRealtimeSymbols, realtimeConfigProblem, realtimeUsage, REALTIME_DEFAULTS, REALTIME_JEV_USD_PER_MTOK_INPUT, sumRealtimeUsage, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
 import type { Decider } from '@core/realtime/jev'
 import { entriesClosed, entrySize, exitTrigger, newExit, verdictIntent } from '@core/realtime/policy'
 import { buildSituation } from '@core/realtime/situation'
@@ -55,14 +58,16 @@ const q = (symbol: string, last: number): Quote => ({ symbol, last, bid: last - 
  * questions, with calm defaults (not extended, clean setup, no reversal,
  * trend intact) so a test that scripts only the direction reads as before.
  */
-function scripted(script: Record<string, { buy?: number; sell?: number; extended?: number; setup?: number; reversal?: number; intact?: number }>): Decider & { calls: number; askedKeys: string[] } {
+function scripted(script: Record<string, { buy?: number; sell?: number; extended?: number; setup?: number; reversal?: number; intact?: number }>): Decider & { calls: number; askedKeys: string[]; lastRetries: number | undefined } {
   const d = {
     model: 'jev-test',
     calls: 0,
     askedKeys: [] as string[],
-    async decide(_state: Record<string, unknown>, questions: Record<string, { type: string }>) {
+    lastRetries: undefined as number | undefined,
+    async decide(_state: Record<string, unknown>, questions: Record<string, { type: string }>, opts: { retries?: number }) {
       d.calls++
       d.askedKeys = Object.keys(questions)
+      d.lastRetries = opts.retries
       const answers: Record<string, unknown> = {}
       for (const [key, qq] of Object.entries(questions)) {
         const [sym, kind] = key.split('__')
@@ -219,6 +224,55 @@ async function main(): Promise<void> {
     check('a model error is jev.error on every row, recorded on the tick and the state', err.tick.decisions.every((d) => d.rule === 'jev.error') && err.tick.error !== undefined && err.state.lastError !== null && err.state.ledger.positions.length === 0)
   }
 
+  console.log('\n— the quiet band: a barely-moved tape is answered from the last verdict, and the bill is kept —')
+  {
+    const t0 = at('10:00')
+    const later = (sec: number): Date => new Date(t0.getTime() + sec * 1000)
+    const jev = scripted({ NVDA: { buy: 0.1 }, AAPL: { buy: 0.1 } })
+    const s1 = await run(base(), t0, [q('NVDA', 100), q('AAPL', 200)], jev)
+    check('the first ask records when, the prices and the held set; the tokens are billed to today and all time; the model id is on the tick', s1.state.lastAsk?.prices.NVDA === 100 && s1.state.lastAsk?.held.length === 0 && s1.state.dayInputTokens === 500 && s1.state.inputTokens === 500 && s1.state.dayModelCalls === 1 && s1.tick.model === 'jev-test', JSON.stringify(s1.state.lastAsk))
+    check('a 15 s agent is allowed one retry', jev.lastRetries === 1)
+    const fast = scripted({ NVDA: { buy: 0.1 } })
+    await runRealtimeTick({ cfg: { ...cfg, intervalSec: 1 }, state: base(), now: t0, quotes: [q('NVDA', 100), q('AAPL', 200)], failed: [], intraBars: {}, dayBars: {}, decider: fast, modelTimeoutMs: 1000 })
+    check('a 1 s agent gets none — the next tick is the retry, and a retried request would pay twice', fast.lastRetries === 0)
+
+    // +1 s, both moved by 0.005%: inside the 0.02% band, asked 1 s ago → not asked.
+    const s2 = await run(s1.state, later(1), [q('NVDA', 100.005), q('AAPL', 200.01)], jev)
+    check('a move of 0.005% one second later is quiet.band on every row: no call, the skip counted', jev.calls === 1 && s2.tick.decisions.every((d) => d.rule === 'quiet.band' && d.outcome === 'quiet') && s2.state.modelSkips === 1 && s2.state.dayModelSkips === 1 && /last verdict stands/.test(s2.tick.skipped ?? ''), `${jev.calls} calls · ${s2.tick.decisions.map((d) => d.rule).join()}`)
+    check('the band does not move the last-ask anchor, so drift accumulates against it', s2.state.lastAsk?.prices.NVDA === 100)
+    // +2 s, NVDA now 0.03% from the anchor → asked, anchor moved.
+    const s3 = await run(s2.state, later(2), [q('NVDA', 100.03), q('AAPL', 200.01)], jev)
+    check('a 0.03% move from the anchor is asked and re-anchors', jev.calls === 2 && s3.state.lastAsk?.prices.NVDA === 100.03 && s3.state.lastAsk?.at === later(2).toISOString(), `${jev.calls} calls`)
+    // +13 s, tiny move but 11 s since the last ask → asked (the time cap).
+    const s4 = await run(s3.state, later(13), [q('NVDA', 100.031), q('AAPL', 200.011)], jev)
+    check('11 s after the last ask a quiet tape is re-read anyway', jev.calls === 3, `${jev.calls} calls`)
+    // A fill changes what is held: the next tick asks the holding questions even inside the band.
+    const buyer = scripted({ NVDA: { buy: 0.9 }, AAPL: { buy: 0.1 } })
+    const s5 = await run(s4.state, later(14), [q('NVDA', 100.06), q('AAPL', 200.011)], buyer)
+    check('(setup) NVDA bought', s5.state.ledger.positions.length === 1)
+    const s6 = await run(s5.state, later(15), [q('NVDA', 100.061), q('AAPL', 200.012)], buyer)
+    check('a symbol held now but not at the last ask is asked, band or no band', buyer.calls === 2 && buyer.askedKeys.includes('NVDA__reversal'), `${buyer.calls} calls · ${buyer.askedKeys.join()}`)
+    check('an engine exit still fires on a quiet tick', (await run(s6.state, later(16), [q('NVDA', 98), q('AAPL', 200.012)], buyer)).tick.decisions.find((d) => d.symbol === 'NVDA')?.rule === 'exit.stop')
+    // The band off: every check asks.
+    const always: RealtimeConfig = { ...cfg, guardrails: { ...cfg.guardrails, askMinMovePct: 0 } }
+    const eager = scripted({ NVDA: { buy: 0.1 }, AAPL: { buy: 0.1 } })
+    const a1 = await runRealtimeTick({ cfg: always, state: base(), now: t0, quotes: [q('NVDA', 100), q('AAPL', 200)], failed: [], intraBars: {}, dayBars: {}, decider: eager, modelTimeoutMs: 1000 })
+    await runRealtimeTick({ cfg: always, state: a1.state, now: later(1), quotes: [q('NVDA', 100.001), q('AAPL', 200)], failed: [], intraBars: {}, dayBars: {}, decider: eager, modelTimeoutMs: 1000 })
+    check('askMinMovePct 0 asks on every check that moved at all', eager.calls === 2, `${eager.calls} calls`)
+    // Exactly equal prices are still the older, cheaper "quiet" rule.
+    const same = await runRealtimeTick({ cfg: always, state: a1.state, now: later(1), quotes: [q('NVDA', 100), q('AAPL', 200)], failed: [], intraBars: {}, dayBars: {}, decider: eager, modelTimeoutMs: 1000 })
+    check('identical prices stay rule quiet, not quiet.band', same.tick.decisions.every((d) => d.rule === 'quiet'))
+    // The bill.
+    const u = realtimeUsage(s4.state)
+    check('the bill: 3 calls × 500 tokens at the list price, one skip; today equals all time on the first day', u.today.calls === 3 && u.today.input === 1500 && u.today.skips === 1 && Math.abs(u.today.usd - (1500 / 1e6) * REALTIME_JEV_USD_PER_MTOK_INPUT) < 1e-12 && u.total.usd === u.today.usd, JSON.stringify(u))
+    const fleet = realtimeUsage(sumRealtimeUsage([s4.state, s6.state]))
+    check('the fleet figure adds agents up', fleet.total.calls === s4.state.modelCalls + s6.state.modelCalls && fleet.total.input === s4.state.inputTokens + s6.state.inputTokens)
+    // A new ET day resets today's counters and keeps the lifetime ones.
+    const nextDay = await run(s4.state, etDateTime('2026-09-17', 10 * 60), [q('NVDA', 101), q('AAPL', 201)], jev)
+    check('the day roll resets today, keeps all time', nextDay.state.dayModelCalls === 1 && nextDay.state.dayInputTokens === 500 && nextDay.state.modelCalls === 4 && nextDay.state.dayModelSkips === 0 && nextDay.state.modelSkips === 1, JSON.stringify(realtimeUsage(nextDay.state)))
+    check('clampRealtimeGuardrails defaults the band for configs written before it existed', clampRealtimeGuardrails({}).askMinMovePct === 0.02 && clampRealtimeGuardrails({}).askAtLeastEverySec === 10 && clampRealtimeGuardrails({ askMinMovePct: -1, askAtLeastEverySec: 0 }).askMinMovePct === 0 && clampRealtimeGuardrails({ askAtLeastEverySec: 0 }).askAtLeastEverySec === 1)
+  }
+
   console.log('\n— the pure rules —')
   {
     const g = cfg.guardrails
@@ -240,7 +294,7 @@ async function main(): Promise<void> {
     check('a held symbol is asked direction, reversal and intact', sit.asked.NVDA.direction === 'NVDA__direction' && sit.asked.NVDA.reversal === 'NVDA__reversal' && sit.asked.NVDA.intact === 'NVDA__intact' && sit.asked.NVDA.setup === undefined)
     check('every question is structured (question / inspect / focus; what / not_for / signals)', (() => {
       const dq = sit.questions.NVDA__direction as unknown as { instructions: { question: string; inspect: string; focus: string }; criteria: Record<string, { what: string; not_for: string; signals: string }> }
-      return typeof dq.instructions.question === 'string' && dq.instructions.inspect === 'instruments.NVDA' && ['up', 'down', 'flat'].every((k) => dq.criteria[k].what && dq.criteria[k].not_for && dq.criteria[k].signals)
+      return typeof dq.instructions.question === 'string' && dq.instructions.inspect === '`instruments.NVDA`' && ['up', 'down', 'flat'].every((k) => dq.criteria[k].what && dq.criteria[k].not_for && dq.criteria[k].signals)
     })())
     const v = readVerdicts({ NVDA__direction: { type: 'choice', choice: 'down', confidence: 0.7, probabilities: { up: 0.1, down: 0.7, flat: 0.2 } }, NVDA__reversal: { type: 'noul', noul: 0.42 }, NVDA__intact: { type: 'noul', noul: 0.55 } }, sit.asked)
     check('readVerdicts reads by the handed-out ids: down → sell, and every judgment beside it', v.NVDA.action === 'sell' && v.NVDA.probabilities.sell === 0.7 && v.NVDA.probabilities.buy === 0.1 && v.NVDA.reversal === 0.42 && v.NVDA.trendIntact === 0.55 && v.NVDA.extended === undefined)
@@ -290,7 +344,8 @@ async function main(): Promise<void> {
     const clock = { date: DAY, minutes: 20 * 60, weekday: 'Wed' as const, hour: 20, minute: 0, second: 0 }
     const sit = buildSituation(crypto, [{ symbol: 'BTC/USD', quote: q('BTC/USD', 60_000), analysis: null, intraBars: [], position: { symbol: 'BTC/USD', qty: 0.04, avgCost: 59_000 }, exit: newExit(59_000, g, '2026-09-17T00:00:00.000Z') }], clock, Date.parse('2026-09-17T00:10:00.000Z'), true)
     const st = sit.state as { session: string; trader: { rules: string }; instruments: Record<string, { time: string; position: Record<string, string> }> }
-    check('the situation says the market is open around the clock and names no flatten time', /around the clock/.test(st.session) && /around the clock/.test(st.instruments['BTC/USD'].time) && !/out of everything by/.test(st.trader.rules) && st.instruments['BTC/USD'].position.units === '0.04', JSON.stringify({ session: st.session, time: st.instruments['BTC/USD'].time }))
+    check('the situation says the market is open around the clock and names no flatten time', /around the clock/.test(st.session) && /around the clock/.test(st.instruments.BTC_USD.time) && !/out of everything by/.test(st.trader.rules) && st.instruments.BTC_USD.position.units === '0.04', JSON.stringify({ session: st.session, time: st.instruments.BTC_USD.time }))
+    check('a pair is keyed as a path segment the model can follow (BTC/USD → instruments.BTC_USD), and the questions point at it', st.instruments['BTC/USD'] === undefined && (sit.questions['BTC/USD__direction'] as unknown as { instructions: { inspect: string } }).instructions.inspect === '`instruments.BTC_USD`')
   }
 
   console.log(failures ? `\n${failures} FAILED` : '\nall ok')

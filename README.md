@@ -20,7 +20,15 @@ npm run dist:win   # installer in dist/
 Both are entered in the app's bottom rows and stored encrypted with the OS keychain on this computer. Nothing goes in `.env`.
 
 - **Live data stream** — your own [Alpaca](https://alpaca.markets/) Market Data key, for stocks. The free plan streams IEX prints and quotes in real time; `sip` needs the paid plan; `test` streams a fake symbol (`FAKEPACA`) around the clock so the whole path can be watched with the market closed. The same key serves the polled snapshots and bars. Crypto needs no key at all (see below).
-- **TypeSafe key** — for Jev. Every check is one request with every symbol's questions in it (fan-out); output tokens are free and input is a few thousand tokens per call.
+- **TypeSafe key** — for Jev. Every check is one request with every symbol's questions in it (fan-out); output tokens are free and input is about a thousand tokens per symbol per call, billed at TypeSafe's list price of $0.042 per million input tokens.
+
+## What a check costs, and what is not asked
+
+Jev is priced per input token, so the bill is the number of calls times the size of each one. Both are kept down on purpose, and both are shown: each row's stats line reads `calls · tokens · $ today · $ all time`, the header pill adds every agent up, and every tick in `ticks.jsonl` carries its `usage` and the versioned model id that answered.
+
+- **The quiet band.** The model is asked only when a price has moved at least `askMinMovePct` (default 0.02%) since it last saw it, or `askAtLeastEverySec` (default 10 s) has passed, or what is held has changed. The same situation gets the same answer — TypeSafe's models are self-consistent by design — so asking again inside the noise buys nothing. On a one-second cadence in a calm tape this is most of the checks; each one is logged as `quiet.band` with the last verdict standing, and the engine's stops, targets and trail still run on every tick. Set the band to 0 to ask on every check.
+- **Only what a judgment reads.** The state carries the tape in words (the touch, who is hitting the book, the last seconds' moves), the bars, the trend and the position — never the engine's stop and target numbers, the cadence or the flatten time, which are enforced in code and would only be context rot; raw print lists are left out because the model reads numbers as text.
+- **No second billing.** A request that times out is not retried — the attempt may already have been answered and charged, and its answer is stale by the time a retry lands; the next tick asks again with fresher prices. Agents on a cadence of five seconds or less get no retries at all; slower ones get one, for a 429 or a 5xx, with the SDK's backoff.
 
 ## Crypto
 

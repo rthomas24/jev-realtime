@@ -27,6 +27,12 @@ export const REALTIME_MAX_AGENTS = 6
 export const REALTIME_RECENT_TICKS = 150
 /** The smallest paper entry worth booking. */
 export const REALTIME_MIN_ORDER_USD = 5
+/** TypeSafe's list price for Jev: dollars per million INPUT tokens. Output tokens are free (docs.typesafe.ai/models). */
+export const REALTIME_JEV_USD_PER_MTOK_INPUT = 0.042
+/** What a run of calls cost, from the input tokens the API reported. */
+export function realtimeModelCostUsd(inputTokens: number): number {
+  return (inputTokens / 1_000_000) * REALTIME_JEV_USD_PER_MTOK_INPUT
+}
 
 /** The model's name as the UI says it — a product fact, not the vendor's. */
 export const REALTIME_MODEL_LABEL = 'Jev (System One)'
@@ -124,6 +130,15 @@ export interface RealtimeGuardrails {
   maxExtended: number
   /** A buy needs at least this setup-quality score (0 chop … 2 clean). */
   minSetup: number
+  /**
+   * The model is re-asked only when a price has moved at least this % since
+   * it last saw it, or `askAtLeastEverySec` has passed. The same situation
+   * gets the same answer (TypeSafe's self-consistency), so asking again
+   * inside the noise is tokens for nothing. 0 asks on every check.
+   */
+  askMinMovePct: number
+  /** A quiet tape is still re-read this often, in seconds. */
+  askAtLeastEverySec: number
 }
 
 export const REALTIME_DEFAULTS: RealtimeGuardrails = {
@@ -142,7 +157,9 @@ export const REALTIME_DEFAULTS: RealtimeGuardrails = {
   reentryCooldownMin: 10,
   horizonMin: 3,
   maxExtended: 0.6,
-  minSetup: 1
+  minSetup: 1,
+  askMinMovePct: 0.02,
+  askAtLeastEverySec: 10
 }
 
 export type RealtimeStatus = 'running' | 'paused'
@@ -215,6 +232,7 @@ export type RealtimeRule =
   | 'feed.unpriced'
   | 'session.closed'
   | 'quiet'
+  | 'quiet.band'
 
 /** One phrase per rule — a `Record` over the closed set, so a new rule without one fails to compile. */
 export const REALTIME_RULE_LABEL: Record<RealtimeRule, string> = {
@@ -241,7 +259,8 @@ export const REALTIME_RULE_LABEL: Record<RealtimeRule, string> = {
   'size.tooSmall': 'Order too small',
   'feed.unpriced': 'No price',
   'session.closed': 'Market closed',
-  quiet: 'Nothing moved'
+  quiet: 'Nothing moved',
+  'quiet.band': 'Barely moved'
 }
 
 export interface RealtimeDecision {
@@ -268,6 +287,8 @@ export interface RealtimeTick {
   /** Round trip of the model call, when one was made. */
   latencyMs?: number
   usage?: { input: number; output: number }
+  /** The versioned model id that answered (`jev-1.13.0`), as the API reported it — an alias moves, this does not. */
+  model?: string
   /** Set when the whole tick did nothing, and why. */
   skipped?: string
   error?: string
@@ -299,6 +320,15 @@ export interface RealtimeState {
   modelCalls: number
   inputTokens: number
   outputTokens: number
+  /** Checks the quiet band answered from the last verdict instead of the model. */
+  modelSkips: number
+  /** Today's share of the four counters above; reset with the day anchor. */
+  dayModelCalls: number
+  dayInputTokens: number
+  dayOutputTokens: number
+  dayModelSkips: number
+  /** The last request actually sent: when, the prices it saw, the symbols held then. The quiet band reads it. */
+  lastAsk: { at: string; prices: Record<string, number>; held: string[] } | null
   recent: RealtimeTick[]
 }
 
@@ -317,6 +347,12 @@ export function emptyRealtimeState(allocation: number): RealtimeState {
     modelCalls: 0,
     inputTokens: 0,
     outputTokens: 0,
+    modelSkips: 0,
+    dayModelCalls: 0,
+    dayInputTokens: 0,
+    dayOutputTokens: 0,
+    dayModelSkips: 0,
+    lastAsk: null,
     recent: []
   }
 }
@@ -376,7 +412,9 @@ export function clampRealtimeGuardrails(g: Partial<RealtimeGuardrails> | undefin
     reentryCooldownMin: clamp(Math.round(num(src.reentryCooldownMin, d.reentryCooldownMin)), 0, 240),
     horizonMin: clamp(Math.round(num(src.horizonMin, d.horizonMin)), 1, 60),
     maxExtended: clamp(num(src.maxExtended, d.maxExtended), 0.05, 1),
-    minSetup: clamp(num(src.minSetup, d.minSetup), 0, 2)
+    minSetup: clamp(num(src.minSetup, d.minSetup), 0, 2),
+    askMinMovePct: clamp(num(src.askMinMovePct, d.askMinMovePct), 0, 5),
+    askAtLeastEverySec: clamp(Math.round(num(src.askAtLeastEverySec, d.askAtLeastEverySec)), 1, 600)
   }
 }
 
@@ -438,6 +476,27 @@ export function realtimeEquity(state: Pick<RealtimeState, 'ledger' | 'lastQuotes
 export function realtimeDayPnl(state: Pick<RealtimeState, 'ledger' | 'lastQuotes' | 'dayStartEquity'>): number | null {
   if (state.dayStartEquity === null) return null
   return Math.round((realtimeEquity(state).equity - state.dayStartEquity) * 100) / 100
+}
+
+/** Model usage as the page shows it: calls, tokens, skipped checks and the bill. */
+export interface RealtimeUsage {
+  calls: number
+  input: number
+  output: number
+  skips: number
+  usd: number
+}
+export type RealtimeUsageCounters = Pick<RealtimeState, 'modelCalls' | 'inputTokens' | 'outputTokens' | 'modelSkips' | 'dayModelCalls' | 'dayInputTokens' | 'dayOutputTokens' | 'dayModelSkips'>
+/** Today and all time, priced at the list rate. */
+export function realtimeUsage(s: RealtimeUsageCounters): { today: RealtimeUsage; total: RealtimeUsage } {
+  const u = (calls: number, input: number, output: number, skips: number): RealtimeUsage => ({ calls, input, output, skips, usd: realtimeModelCostUsd(input) })
+  return { today: u(s.dayModelCalls, s.dayInputTokens, s.dayOutputTokens, s.dayModelSkips), total: u(s.modelCalls, s.inputTokens, s.outputTokens, s.modelSkips) }
+}
+/** The counters of several agents added up — the header's fleet figure. */
+export function sumRealtimeUsage(states: readonly RealtimeUsageCounters[]): RealtimeUsageCounters {
+  const sum: RealtimeUsageCounters = { modelCalls: 0, inputTokens: 0, outputTokens: 0, modelSkips: 0, dayModelCalls: 0, dayInputTokens: 0, dayOutputTokens: 0, dayModelSkips: 0 }
+  for (const s of states) for (const k of Object.keys(sum) as (keyof RealtimeUsageCounters)[]) sum[k] += s[k] ?? 0
+  return sum
 }
 
 /** One line per decision for the tape: "NVDA · Model said buy · filled 1.2 @ $182.40". */

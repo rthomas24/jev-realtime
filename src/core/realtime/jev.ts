@@ -9,7 +9,13 @@ export type JevQuestion = ChoiceQuestion | NoulQuestion | ScoreQuestion
 export type JevAnswers<Q extends Questions> = SystemOneResult<Q>['answers']
 
 export interface DecideOptions {
+  /** Per-attempt timeout: the tick's budget. */
   timeoutMs: number
+  /**
+   * Attempts after the first. 0 for a fast cadence, where the next tick is
+   * the retry with fresher prices; a retried request pays its tokens again.
+   */
+  retries?: number
   signal?: AbortSignal
 }
 
@@ -19,14 +25,20 @@ export interface Decider {
   decide<Q extends Questions>(state: Record<string, unknown>, questions: Q, opts: DecideOptions): Promise<{ answers: JevAnswers<Q>; usage: { input: number; output: number }; model: string }>
 }
 
-/** The real thing: one client per key, retries left to the SDK, one attempt's timeout = the tick budget. */
+/**
+ * The real thing: one client per key. Retries are the SDK's — backoff, and
+ * `Retry-After` honoured on a 429 / 529 — but never after a TIMEOUT: an
+ * attempt that ran out the clock may already have been answered and billed,
+ * and its answer is stale by the time a second one lands. Logging stays off:
+ * the SDK's debug level prints request bodies unredacted.
+ */
 export async function typesafeDecider(apiKey: string, model = 'jev-latest'): Promise<Decider> {
   const { TypeSafeClient } = await import('@typesafe-ai/sdk')
-  const client = new TypeSafeClient({ apiKey, defaultModel: model, logLevel: 'off', retry: { maxRetries: 1, backoffInitialMs: 250, backoffMaxMs: 1000 } })
+  const client = new TypeSafeClient({ apiKey, defaultModel: model, logLevel: 'off', retry: { maxRetries: 1, backoffInitialMs: 250, backoffMaxMs: 1000, apiTimeoutError: false } })
   return {
     model,
     async decide(state, questions, opts) {
-      const r = await client.systemOne({ state: state as never, questions }, { timeout: opts.timeoutMs, signal: opts.signal })
+      const r = await client.systemOne({ state: state as never, questions }, { timeout: opts.timeoutMs, signal: opts.signal, retry: { maxRetries: opts.retries ?? 1 } })
       return { answers: r.answers, usage: { input: r.usage.input_tokens, output: r.usage.output_tokens }, model: r.model }
     }
   }

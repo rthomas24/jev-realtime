@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, Check, Circle, CircleAlert, KeyRound, Loader2, Pause, Play, Plus, Radio, RefreshCw, RotateCcw, Settings2, Trash2, Zap } from 'lucide-react'
 import { useRealtime, type PricePoint } from '@renderer/store/realtimeStore'
-import { cn, clockTime, countdown, money, relTime, signedMoney } from '@renderer/lib/format'
+import { cn, clockTime, compactNumber, countdown, money, relTime, signedMoney, usd } from '@renderer/lib/format'
 import { EmptyState, SectionHead } from '@renderer/components/common/Primitives'
 import { Field, Segmented, Sheet } from '@renderer/components/common/Sheet'
 import { Splitter, usePanelWidth } from '@renderer/components/common/Splitter'
@@ -17,6 +17,7 @@ import {
   type RealtimeStreamLeg,
   REALTIME_DEFAULT_INTERVAL_SEC,
   REALTIME_DEFAULTS,
+  REALTIME_JEV_USD_PER_MTOK_INPUT,
   REALTIME_MAX_INTERVAL_SEC,
   REALTIME_MIN_INTERVAL_SEC,
   REALTIME_MODEL_LABEL,
@@ -24,6 +25,8 @@ import {
   realtimeConfigProblem,
   realtimeDayPnl,
   realtimeEquity,
+  realtimeUsage,
+  sumRealtimeUsage,
   type RealtimeConfig,
   type RealtimeGuardrails,
   type RealtimeStreamFeed,
@@ -234,7 +237,7 @@ function StreamRow(): JSX.Element {
               Cancel
             </button>
           )}
-          <span className="text-muted truncate">Your own Alpaca Market Data key, stored encrypted on this computer. IEX is free and real time; Test prints a fake symbol 24/7.</span>
+          <span className="text-muted truncate">Your own Alpaca Market Data key for stocks, stored encrypted on this computer. IEX is free and real time; Test prints a fake symbol 24/7. Crypto needs no key: Coinbase's public feed.</span>
         </>
       ) : (
         <>
@@ -406,7 +409,7 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
           </div>
         </Field>
       )}
-      <Field label="Check every" hint="How often it re-reads the tape and asks the model. One second needs the live stream; quiet ticks (no price change) skip the model.">
+      <Field label="Check every" hint="How often it re-reads the tape and asks the model. One second needs the live stream; a tape that has barely moved is not re-asked (Model spend, below).">
         <Segmented value={String(f.intervalSec)} onChange={(v) => set({ intervalSec: Number(v) })} options={INTERVALS.map((n) => ({ value: String(n), label: `${n}s` }))} />
       </Field>
       <Field label="Standing order" hint="One or two sentences the model judges for. Leave blank for disciplined intraday momentum.">
@@ -432,10 +435,16 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
       </div>
 
       <SectionHead title="Thresholds" hint="The model returns a probability for each answer. Code acts only past these." />
-      <div className="card overflow-hidden divide-hair mb-2">
+      <div className="card overflow-hidden divide-hair mb-5">
         <NumberField label="Buy when P(buy) ≥" value={f.g.buyThreshold} onChange={(v) => setG({ buyThreshold: v ?? REALTIME_DEFAULTS.buyThreshold })} step={0.05} min={0.5} max={0.99} />
         <NumberField label="Sell when P(sell) ≥" value={f.g.sellThreshold} onChange={(v) => setG({ sellThreshold: v ?? REALTIME_DEFAULTS.sellThreshold })} step={0.05} min={0.5} max={0.99} />
         <NumberField label="Sell on reversal ≥" hint="A separate yes/no question about a sharp reversal against the position; this alone closes it." value={f.g.reversalThreshold} onChange={(v) => setG({ reversalThreshold: v ?? REALTIME_DEFAULTS.reversalThreshold })} step={0.05} min={0.5} max={0.99} />
+      </div>
+
+      <SectionHead title="Model spend" hint="Every check that asks the model pays for its input tokens. A tape that has barely moved gets the last verdict instead — the same situation gets the same answer." />
+      <div className="card overflow-hidden divide-hair mb-2">
+        <NumberField label="Re-ask after a move of" hint="Since the model last saw the price. 0 asks on every check." value={f.g.askMinMovePct} onChange={(v) => setG({ askMinMovePct: v ?? REALTIME_DEFAULTS.askMinMovePct })} suffix="%" step={0.01} min={0} max={5} />
+        <NumberField label="…or at least every" hint="A quiet tape is still re-read this often." value={f.g.askAtLeastEverySec} onChange={(v) => setG({ askAtLeastEverySec: v ?? REALTIME_DEFAULTS.askAtLeastEverySec })} suffix="s" step={1} min={1} max={600} />
       </div>
     </Sheet>
   )
@@ -460,9 +469,9 @@ interface Step {
 function Readiness({ symbol, clock, continuous }: { symbol: string; clock: Clock; continuous: boolean }): JSX.Element {
   const key = useRealtime((s) => s.key)
   const stream = useRealtime((s) => s.stream)
-  // Two sockets on one key: stocks (IEX/SIP/test) and crypto, which the
-  // engine also serves keyless from the public feed — so a crypto row is
-  // never blocked by a missing key, only slower.
+  // Two sockets: stocks (IEX/SIP/test, on the Alpaca key) and crypto
+  // (Coinbase's public feed, no key at all) — a crypto row reads its own
+  // leg and never waits on a key.
   const leg: RealtimeStreamLeg = (continuous ? stream?.crypto : stream) ?? REALTIME_STREAM_LEG_OFF
   const streamState = leg.state
   const test = !continuous && stream?.feed === 'test'
@@ -474,7 +483,7 @@ function Readiness({ symbol, clock, continuous }: { symbol: string; clock: Clock
         : streamState === 'connecting' || streamState === 'reconnecting'
           ? { ok: false, busy: true, title: 'Live tape', detail: `${streamState === 'connecting' ? 'Connecting' : 'Reconnecting'} to the stream…` }
           : continuous
-            ? { ok: true, title: 'Live tape', detail: leg.detail ?? 'Polled from the public crypto feed every few seconds. Add your Alpaca key below for a live tape.' }
+            ? { ok: false, title: 'Live tape', detail: leg.detail ?? 'Crypto stream off — it opens when a crypto agent runs; no key needed.' }
             : !stream?.configured
               ? { ok: false, title: 'Live tape', detail: 'Add your Alpaca Market Data key in the row below. The free plan streams IEX in real time; the Test feed prints a fake symbol around the clock.' }
               : { ok: false, title: 'Live tape', detail: leg.detail ?? 'Stream off.' }
@@ -658,6 +667,7 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   const { config, state } = s
   const { equity } = realtimeEquity(state)
   const day = realtimeDayPnl(state)
+  const usage = realtimeUsage(state)
   const running = config.status === 'running'
   const ticks = pageTicks.length ? pageTicks : state.recent
   const latencies = useMemo(() => ticks.map((t) => t.latencyMs).filter((n): n is number => typeof n === 'number'), [ticks])
@@ -738,7 +748,13 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
       <div className="shrink-0 px-5 pb-2.5 flex items-center gap-5 text-xs text-text-3 nums whitespace-nowrap">
         {lastLat !== null && <span>last {Math.round(lastLat)} ms</span>}
         {avgLat !== null && <span>avg {avgLat} ms</span>}
-        {state.modelCalls > 0 && <span>{state.modelCalls} calls</span>}
+        {usage.total.calls > 0 && (
+          <span
+            title={`Model spend, this agent. Today: ${usage.today.calls} calls, ${usage.today.input.toLocaleString('en-US')} input tokens, ${usd(usage.today.usd)}${usage.today.skips ? `, ${usage.today.skips} checks answered from the last verdict` : ''}. All time: ${usage.total.calls} calls, ${usage.total.input.toLocaleString('en-US')} input tokens, ${usd(usage.total.usd)}. Input tokens × $${REALTIME_JEV_USD_PER_MTOK_INPUT} per million; output tokens are free.`}
+          >
+            {usage.today.calls} calls · {compactNumber(usage.today.input)} tok · {usd(usage.today.usd)} today{usage.today.skips > 0 ? ` · ${usage.today.skips} skipped` : ''} · {usd(usage.total.usd)} all time
+          </span>
+        )}
         {state.ledger.fills.length > 0 && <span>{state.ledger.fills.length} fills</span>}
         {state.ticksToday > 0 && <span>{state.ticksToday} checks today</span>}
         <span>every {config.intervalSec}s</span>
@@ -814,6 +830,7 @@ export function RealtimePage(): JSX.Element {
   }
   const selected = active ? agents[active.id] : undefined
   const model = key?.models?.[0] ?? null
+  const fleet = useMemo(() => realtimeUsage(sumRealtimeUsage(Object.values(agents).map((a) => a.state))), [agents])
   return (
     <section className="flex-1 min-w-0 h-full flex flex-col bg-bg">
       <header className="drag h-[var(--h-header)] shrink-0 flex items-center gap-3 px-5 hair-b">
@@ -833,6 +850,14 @@ export function RealtimePage(): JSX.Element {
         <span className={cn('pill no-drag', model ? 'pill-accent' : key?.hasKey ? '' : 'pill-warn')} title={model ? 'The model the stored key can use' : undefined}>
           {model ?? (key?.hasKey ? 'key stored' : 'no model key')}
         </span>
+        {fleet.total.calls > 0 && (
+          <span
+            className="pill no-drag nums"
+            title={`TypeSafe spend across every agent. Today: ${fleet.today.calls} calls, ${fleet.today.input.toLocaleString('en-US')} input tokens${fleet.today.skips ? `, ${fleet.today.skips} checks answered without a call` : ''}. All time: ${fleet.total.calls} calls, ${fleet.total.input.toLocaleString('en-US')} input tokens. Input tokens × $${REALTIME_JEV_USD_PER_MTOK_INPUT} per million; output tokens are free.`}
+          >
+            {usd(fleet.today.usd)} today · {usd(fleet.total.usd)} all time
+          </span>
+        )}
         <button className="btn btn-primary btn-sm no-drag" onClick={() => setSheet({ kind: 'new' })}>
           <Plus size={13} /> Watch a stock
         </button>

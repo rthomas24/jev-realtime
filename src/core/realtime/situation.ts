@@ -25,6 +25,11 @@ import { effectiveStop } from './policy'
  *  - every question for every symbol goes in ONE request (fan-out: parallel
  *    evaluation, no latency for the extra questions), speculative ones
  *    included, and code consumes only the applicable answers;
+ *  - the state carries nothing the questions do not read: the engine's
+ *    exits, the cadence and the flatten time are enforced in code and never
+ *    asked about, so they are not sent (unrelated state is context rot, and
+ *    tokens); raw print lists are left out too — the model reads numbers as
+ *    text and is weak at comparing them, so the tape is handed over in words;
  *  - instructions and criteria are STRUCTURED (`question` / `focus` /
  *    `inspect`, `what` / `not_for`, `summary` / `signals`) with the same
  *    field names across options, and refer to the state by path.
@@ -65,6 +70,11 @@ export interface Situation {
 const pct = (a: number, b: number): number => ((a - b) / b) * 100
 const signed = (n: number, dp = 2): string => `${n > 0 ? 'up' : n < 0 ? 'down' : 'flat'}${n === 0 ? '' : ` ${Math.abs(n).toFixed(dp)}%`}`
 const px = (n: number): string => money(n)
+
+/** The state key for a symbol: a path segment the model can be pointed at (`BTC/USD` → `BTC_USD`). */
+export function stateKey(symbol: string): string {
+  return symbol.replace(/[^A-Za-z0-9]+/g, '_')
+}
 
 function rangeWords(last: number, high: number | null, low: number | null): string | null {
   if (high === null || low === null || high <= low) return null
@@ -159,7 +169,6 @@ function describeTape(t: TapeSnapshot, nowMs: number, unit: string): Record<stri
     out.flow_last_minute = `${f.prints} prints, ${classified.toLocaleString('en-US', { maximumFractionDigits: 4 })} classified ${unit}: ${buyPct >= 65 ? `buyers lifting the offer (${buyPct}% at the ask)` : buyPct <= 35 ? `sellers hitting the bid (${100 - buyPct}% at the bid)` : `two-sided (${buyPct}% at the ask)`}`
   } else if (f.prints > 0) out.flow_last_minute = `${f.prints} prints, mostly inside the spread`
   out.pace = t.printsPerMinute >= 60 ? `very active — about ${t.printsPerMinute} prints a minute` : t.printsPerMinute >= 15 ? `active — about ${t.printsPerMinute} prints a minute` : `quiet — about ${t.printsPerMinute} prints a minute`
-  if (t.recent.length >= 4) out.recent_prints_oldest_first = t.recent.map((p) => p.toFixed(2)).join(' ')
   return out
 }
 
@@ -243,16 +252,18 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
   for (const s of inputs) {
     const holding = s.position !== null
     if (!holding && !flatAllowed) continue
-    instruments[s.symbol] = describeSymbol(s, clock, g, nowMs, continuous)
-    const ref = `instruments.${s.symbol}`
+    instruments[stateKey(s.symbol)] = describeSymbol(s, clock, g, nowMs, continuous)
+    const ref = `instruments.${stateKey(s.symbol)}`
+    // The path in backticks, as the docs point a question at a nested value.
+    const path = `\`${ref}\``
     const q: AskedSymbol = { direction: `${s.symbol}__direction` }
     questions[q.direction] = {
       type: 'choice',
       instructions: {
         question: `Over ${horizon}, will the price of \`${ref}\` be higher, lower, or about where it is now?`,
-        inspect: ref,
+        inspect: path,
         focus: `The judgment is the near-term path, not the day: weigh \`${ref}.tape\` (the last seconds — the touch, who is hitting the book, the last prints) most, then \`${ref}.five_minute_bars\`, then \`${ref}.daily_trend\`. A move that has already happened is not a move that is coming.`,
-        note: `The trader's standing order is in \`trader\`. "About where it is" means inside the ordinary noise of the last minutes, not enough to trade.`
+        note: `The trader's standing order is in \`trader.style\`. "About where it is" means inside the ordinary noise of the last minutes, not enough to trade.`
       },
       criteria: {
         up: { what: `Higher after ${horizon} by more than the noise of the last minutes.`, not_for: 'A spike that is already fading; a flat, two-sided tape.', signals: 'buyers lifting the offer, higher lows, price holding above VWAP or the opening range, rising prints' },
@@ -265,7 +276,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       q.intact = `${s.symbol}__intact`
       questions[q.reversal] = {
         type: 'noul',
-        instructions: { question: `Is \`${ref}\` showing a sharp reversal AGAINST the trader's long position right now?`, inspect: ref, focus: 'A reversal is decisive, not a pause: a fast move down on heavy selling, a failed breakout, or the pattern that carried it up breaking.' },
+        instructions: { question: `Is \`${ref}\` showing a sharp reversal AGAINST the trader's long position right now?`, inspect: path, focus: 'A reversal is decisive, not a pause: a fast move down on heavy selling, a failed breakout, or the pattern that carried it up breaking.' },
         criteria: {
           true: { what: 'Yes — the tape has turned against the position decisively.', examples: ['sellers hitting the bid for most of the last minute and the price is falling through recent lows', 'a breakout above the opening range that failed and is now back inside it'] },
           false: { what: 'No — an ordinary pullback, chop, or continued strength.', examples: ['a small dip inside the trend with buyers still lifting the offer', 'a flat tape near the high'] }
@@ -273,7 +284,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       }
       questions[q.intact] = {
         type: 'noul',
-        instructions: { question: `Is the move that justified entering \`${ref}\` still intact?`, inspect: ref, focus: 'Judge the position\'s reason to exist: trend, flow and the level it entered above. This is separate from whether a reversal is happening right now.' },
+        instructions: { question: `Is the move that justified entering \`${ref}\` still intact?`, inspect: path, focus: 'Judge the position\'s reason to exist: trend, flow and the level it entered above. This is separate from whether a reversal is happening right now.' },
         criteria: {
           true: { what: 'Yes — the trend and the flow that carried the entry are still there.', signals: 'higher lows since the entry, buyers still active, price above the entry level and above VWAP' },
           false: { what: 'No — the reason to be in the trade has gone, even without a sharp reversal.', signals: 'momentum faded to a two-sided drift, price back below the entry level, flow turned to sellers' }
@@ -284,7 +295,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       q.setup = `${s.symbol}__setup`
       questions[q.extended] = {
         type: 'noul',
-        instructions: { question: `Is the price of \`${ref}\` EXTENDED — has the move already happened, so that buying now would be chasing?`, inspect: ref, focus: 'Distance from VWAP and from where the move started, how fast the last minutes ran, and whether the tape is already cooling.' },
+        instructions: { question: `Is the price of \`${ref}\` EXTENDED — has the move already happened, so that buying now would be chasing?`, inspect: path, focus: 'Distance from VWAP and from where the move started, how fast the last minutes ran, and whether the tape is already cooling.' },
         criteria: {
           true: { what: 'Yes — a buy here is late: far above VWAP or the opening range after a fast run, prints already fading.', examples: ['up 1.5% in the last 15 minutes and at the day high with flow going two-sided'] },
           false: { what: 'No — the price is near where the move is starting or resuming, not at the end of one.', examples: ['just reclaimed VWAP with buyers lifting the offer', 'a tight pullback holding a higher low'] }
@@ -292,7 +303,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       }
       questions[q.setup] = {
         type: 'score',
-        instructions: { question: `How clean is the long setup in \`${ref}\` right now?`, inspect: ref, focus: 'One dimension only: how well trend, flow and structure line up for a long entry with a defined risk. Direction and extension are asked separately.' },
+        instructions: { question: `How clean is the long setup in \`${ref}\` right now?`, inspect: path, focus: 'One dimension only: how well trend, flow and structure line up for a long entry with a defined risk. Direction and extension are asked separately.' },
         criteria: [
           { summary: 'Chop — no setup.', signals: 'two-sided flow, small-bodied bars, price inside a range with no lean, quiet pace' },
           { summary: 'Mixed — some alignment, some against.', signals: 'trend up but flow two-sided, or flow strong but structure unclear' },
@@ -302,12 +313,13 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
     }
     asked[s.symbol] = q
   }
-  const exits = `A buy opens a position sized by the operator's limits with a ${g.stopLossPct}% stop and a ${g.takeProfitPct}% target${g.trailPct ? ` plus a ${g.trailPct}% trailing stop` : ''}; a sell closes the whole position. The engine enforces every stop and target itself.`
+  // Only what a judgment reads: the standing order and the one rule that
+  // shapes a verdict. Stops, targets, the cadence and the flatten time are
+  // the engine's and are never asked about.
   const state = {
     trader: {
       style: cfg.style || (continuous ? 'Disciplined short-term momentum trading in crypto spot pairs: buy strength that is confirmed by trend and flow, take profits at the target, cut losses at the stop.' : 'Disciplined intraday momentum trading: buy strength that is confirmed by trend and volume, take profits at the target, cut losses at the stop.'),
-      rules: continuous ? `Long only, one position per pair, no session close: a position is held until the model closes it or a level does. ${exits}` : `Long only, one position per symbol, out of everything by ${g.flattenAt} ET. ${exits}`,
-      cadence: `Each instrument is checked every ${cfg.intervalSec === 1 ? 'second' : `${cfg.intervalSec} seconds`} ${continuous ? 'around the clock' : 'through the session'}; the questions are about ${horizon}.`
+      rules: 'Long only, one position per instrument; a sell closes the whole position.'
     },
     session: continuous ? `Crypto spot market, open around the clock — ${clock.weekday} ${clock.date} in ET.` : `Regular US equity session, ${clock.weekday} ${clock.date}.`,
     instruments

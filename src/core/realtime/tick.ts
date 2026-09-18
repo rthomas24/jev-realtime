@@ -11,7 +11,7 @@ import { submitPaperOrder, toPaperQuotes, type PaperQuote } from '../broker/pape
 import { analyzeSymbol } from '../market/indicators'
 import { lastSessionBars } from '../market/feed'
 import type { Decider } from './jev'
-import { dayLossLocked, entriesClosed, entryBlocked, entrySize, exitTrigger, newExit, ratchetHigh, verdictIntent } from './policy'
+import { dayLossLocked, entriesClosed, entryBlocked, entrySize, exitTrigger, newExit, quietBand, ratchetHigh, verdictIntent } from './policy'
 import { buildSituation, type Asked, type SymbolInputs } from './situation'
 
 /**
@@ -22,7 +22,8 @@ import { buildSituation, type Asked, type SymbolInputs } from './situation'
  *   2. enforce the engine's exits (stop / trail / target / flatten) in code,
  *      BEFORE any model is consulted — a stop is not a suggestion;
  *   3. set the daily-loss buy lock from the marked equity;
- *   4. skip the model when nothing moved (a quiet tick costs nothing);
+ *   4. skip the model when nothing moved, or moved less than the noise since
+ *      it was last asked (a quiet tick costs nothing);
  *   5. ask the model ONE question set over every symbol that can still act;
  *   6. read each verdict through the thresholds and the entry rules, and
  *      book paper fills through the same `submitPaperOrder` the thread agents use.
@@ -95,7 +96,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
   // 1. The day anchor: the first marked equity of each ET day.
   if (state.dayDate !== clock.date) {
     const { equity } = realtimeEquity({ ledger, lastQuotes: state.lastQuotes })
-    state = { ...state, dayDate: clock.date, dayStartEquity: equity, buyLocked: false, ticksToday: 0 }
+    state = { ...state, dayDate: clock.date, dayStartEquity: equity, buyLocked: false, ticksToday: 0, dayModelCalls: 0, dayInputTokens: 0, dayOutputTokens: 0, dayModelSkips: 0 }
   }
   state.ticksToday += 1
 
@@ -170,6 +171,16 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
     tick.skipped = 'No price changed since the last check.'
     return finish()
   }
+  // The quiet band: prices that moved, but by less than the noise since the
+  // model last saw them, the same symbols held, inside the re-ask window.
+  // The last verdict stands; the row says so and the tokens are kept.
+  const band = quietBand(state.lastAsk, candidates, (s) => quoteMap.get(s)!.last, held, g, now)
+  if (band) {
+    for (const s of candidates) decisions.push({ symbol: s, price: quoteMap.get(s)!.last, intent: 'none', outcome: 'quiet', rule: 'quiet.band', detail: band })
+    tick.skipped = band
+    state = { ...state, modelSkips: state.modelSkips + 1, dayModelSkips: state.dayModelSkips + 1 }
+    return finish()
+  }
 
   if (!i.decider) {
     for (const s of candidates) decisions.push({ symbol: s, price: quoteMap.get(s)!.last, intent: 'none', outcome: 'blocked', rule: 'jev.noKey', detail: 'Add a TypeSafe API key on the Real time page to let the model decide.' })
@@ -202,10 +213,23 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
   const t0 = Date.now()
   let verdicts: Record<string, RealtimeVerdict> = {}
   try {
-    const r = await i.decider.decide(situation.state, situation.questions, { timeoutMs: i.modelTimeoutMs })
+    // A fast cadence gets no retry: the next tick asks again with fresher
+    // prices, and a retried request would pay its tokens twice.
+    const r = await i.decider.decide(situation.state, situation.questions, { timeoutMs: i.modelTimeoutMs, retries: cfg.intervalSec <= 5 ? 0 : 1 })
     tick.latencyMs = Date.now() - t0
     tick.usage = r.usage
-    state = { ...state, modelCalls: state.modelCalls + 1, inputTokens: state.inputTokens + r.usage.input, outputTokens: state.outputTokens + r.usage.output, lastError: null }
+    tick.model = r.model
+    state = {
+      ...state,
+      modelCalls: state.modelCalls + 1,
+      inputTokens: state.inputTokens + r.usage.input,
+      outputTokens: state.outputTokens + r.usage.output,
+      dayModelCalls: state.dayModelCalls + 1,
+      dayInputTokens: state.dayInputTokens + r.usage.input,
+      dayOutputTokens: state.dayOutputTokens + r.usage.output,
+      lastAsk: { at: nowIso, prices: Object.fromEntries(candidates.map((s) => [s, quoteMap.get(s)!.last])), held: candidates.filter((s) => held.has(s)) },
+      lastError: null
+    }
     verdicts = readVerdicts(r.answers as Record<string, unknown>, situation.asked)
   } catch (e) {
     tick.latencyMs = Date.now() - t0

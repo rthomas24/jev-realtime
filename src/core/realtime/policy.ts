@@ -101,6 +101,29 @@ export function entrySize(g: RealtimeGuardrails, allocation: number, ledger: Led
   return { qty, notional: Math.round(qty * price * 100) / 100 }
 }
 
+/**
+ * Whether this tick may skip the model: every candidate has moved less than
+ * `askMinMovePct` since the model last saw it, is held (or not) exactly as it
+ * was then, and the last ask is younger than `askAtLeastEverySec`. The model
+ * answers the same situation the same way, so the last verdict stands and
+ * the tokens are kept. The sentence for the row, or null: ask.
+ */
+export function quietBand(lastAsk: RealtimeState['lastAsk'], candidates: readonly string[], priceOf: (symbol: string) => number, held: ReadonlySet<string>, g: RealtimeGuardrails, now: Date): string | null {
+  if (!lastAsk || g.askMinMovePct <= 0) return null
+  const ageSec = (now.getTime() - Date.parse(lastAsk.at)) / 1000
+  if (!(ageSec >= 0) || ageSec >= g.askAtLeastEverySec) return null
+  let biggest = 0
+  for (const s of candidates) {
+    const then = lastAsk.prices[s]
+    if (then === undefined || !(then > 0)) return null
+    if (held.has(s) !== lastAsk.held.includes(s)) return null
+    const move = Math.abs((priceOf(s) - then) / then) * 100
+    if (move >= g.askMinMovePct) return null
+    biggest = Math.max(biggest, move)
+  }
+  return `Moved ${biggest.toFixed(3)}% since the model was asked ${ageSec < 1.5 ? 'a second' : `${Math.round(ageSec)} s`} ago — inside the ${g.askMinMovePct}% band, so the last verdict stands (re-asked at ≥ ${g.askMinMovePct}% or every ${g.askAtLeastEverySec} s).`
+}
+
 /** Has the day's loss crossed the lock? Measured on marked equity against the day's opening equity, as % of allocation. */
 export function dayLossLocked(g: RealtimeGuardrails, allocation: number, dayStartEquity: number | null, equity: number): boolean {
   if (dayStartEquity === null || allocation <= 0) return false

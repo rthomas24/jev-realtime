@@ -85,3 +85,16 @@ export function compactNumber(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
   return String(n)
 }
+
+/**
+ * Dollars for a bill that is mostly cents: the model's list price is $0.042
+ * per million input tokens, so a day reads `$0.0031` and a month `$0.42`.
+ * Two decimals would show `$0.00` for a week; the precision follows the size.
+ */
+export function usd(n: number): string {
+  if (!Number.isFinite(n)) return '—'
+  if (n === 0) return '$0'
+  if (n < 0.01) return `$${n.toFixed(4)}`
+  if (n < 1) return `$${n.toFixed(3)}`
+  return `$${n.toFixed(2)}`
+}

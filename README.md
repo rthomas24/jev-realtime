@@ -35,7 +35,7 @@ Jev is priced per input token, so the bill is the number of calls times the size
 An agent is either stocks or crypto (chosen when it is created; one book, one kind of thing in it). Crypto agents watch spot pairs — type `BTC`, `eth`, `SOL/USD` or `BTC-USD`; they come out as `BTC/USD` — and differ from stock agents in exactly the ways the market does:
 
 - **No key needed, and a real tape.** Crypto comes from Coinbase Exchange's public market data: the WebSocket feed (`ws-feed.exchange.coinbase.com`) streams every print and the best bid and ask with no authentication, and the REST API serves tickers and 5-minute / daily candles the same way. A crypto agent therefore runs on a fresh install with nothing entered and still sees a one-second tape; the Alpaca key is for stocks only. A pair whose book has moved since its last print is marked at the mid, so a thin pair still moves with its market.
-- **Around the clock.** No open, no close, no flatten time, no entry window. The stop, target, trail and re-entry cooldown apply as for stocks; the day-loss lock still resets on the ET date.
+- **Around the clock.** No open, no close, no flatten time, no entry window. The stop, target and trail apply as for stocks; the day-loss lock still resets on the ET date.
 - **Instant settlement.** Sale proceeds are spendable on the next tick; stocks rehearse T+1 as a cash account would.
 - **Fractional units.** A $2,500 position in BTC is `0.03…` BTC; the paper book carries quantities to six decimals.
 

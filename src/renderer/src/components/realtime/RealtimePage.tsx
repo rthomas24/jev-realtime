@@ -430,7 +430,7 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
         {!continuous && <TimeField label="No entries before" value={f.g.noEntriesBeforeEt} onChange={(v) => setG({ noEntriesBeforeEt: v })} />}
         {!continuous && <TimeField label="No entries after" value={f.g.noEntriesAfterEt} onChange={(v) => setG({ noEntriesAfterEt: v })} />}
         <NumberField label="Max above VWAP" hint="A buy further above VWAP than this is refused as chasing. Blank turns it off." value={f.g.maxEntryExtensionPct} onChange={(v) => setG({ maxEntryExtensionPct: v })} suffix="%" min={0.1} max={20} nullable />
-        <NumberField label="Re-entry cooldown" hint="After a sell in the same symbol." value={f.g.reentryCooldownMin} onChange={(v) => setG({ reentryCooldownMin: v ?? REALTIME_DEFAULTS.reentryCooldownMin })} suffix="min" step={1} min={0} max={240} />
+
         <NumberField label="Day loss lock" hint="Down this much of the allocation on the day and buys stop until tomorrow. Sells and exits keep working." value={f.g.maxDailyLossPct} onChange={(v) => setG({ maxDailyLossPct: v ?? REALTIME_DEFAULTS.maxDailyLossPct })} suffix="%" min={0.1} max={50} />
       </div>
 

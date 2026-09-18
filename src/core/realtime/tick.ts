@@ -71,7 +71,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
   const clock = etClock(now)
   const nowIso = now.toISOString()
   const log = i.log ?? (() => undefined)
-  let state: RealtimeState = { ...i.state, exits: { ...i.state.exits }, lastSellAt: { ...i.state.lastSellAt }, lastQuotes: { ...i.state.lastQuotes } }
+  let state: RealtimeState = { ...i.state, exits: { ...i.state.exits }, lastQuotes: { ...i.state.lastQuotes } }
   let ledger: Ledger = state.ledger
   const decisions: RealtimeDecision[] = []
   const tick: RealtimeTick = { id: newId('rt_'), at: nowIso, session: continuous ? 'open' : sessionLabel(now), decisions, equity: 0, unrealized: 0 }
@@ -129,7 +129,6 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
     const r = book('sell', p.symbol, p.qty)
     if (!r) continue
     delete state.exits[p.symbol]
-    state.lastSellAt[p.symbol] = nowIso
     exited.add(p.symbol)
     decisions.push({ symbol: p.symbol, price: last, intent: 'exit', outcome: 'filled', rule: hit.rule, detail: hit.detail, fill: r.fill, econ: fillEconomics(r.before, ledger, r.fill) })
   }
@@ -263,13 +262,12 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
         continue
       }
       delete state.exits[s]
-      state.lastSellAt[s] = nowIso
       decisions.push({ symbol: s, price: last, verdict: v, intent: 'sell', outcome: 'filled', rule: read.rule, detail: read.detail, fill: r.fill, econ: fillEconomics(r.before, ledger, r.fill) })
       continue
     }
     // buy
     const analysis = inputs.find((x) => x.symbol === s)?.analysis ?? null
-    const blocked = entryBlocked(s, g, state, last, analysis?.vwap ?? null, now)
+    const blocked = entryBlocked(g, last, analysis?.vwap ?? null)
     if (blocked) {
       decisions.push({ symbol: s, price: last, verdict: v, intent: 'buy', outcome: 'blocked', rule: blocked.rule, detail: `${read.detail} ${blocked.detail}` })
       continue

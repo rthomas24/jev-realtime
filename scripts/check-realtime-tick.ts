@@ -128,11 +128,11 @@ async function main(): Promise<void> {
     check('the position and its exits are gone', r3.state.ledger.positions.length === 0 && r3.state.exits.NVDA === undefined)
     check('the book balances: cash = allocation + realized', Math.abs(r3.state.ledger.cash - (cfg.allocation + r3.state.ledger.realizedPnl)) < 0.005, `${r3.state.ledger.cash} vs ${cfg.allocation + r3.state.ledger.realizedPnl}`)
 
-    console.log('\n— the re-entry cooldown refuses the next buy in the same symbol —')
+    console.log('\n— no cooldown: the same symbol may be bought again on the very next check —')
     const jev4 = scripted({ NVDA: { buy: 0.9 } })
     const r4 = await run(r3.state, at('10:12'), [q('NVDA', 101.5), q('AAPL', 201)], jev4)
-    const cool = r4.tick.decisions.find((d) => d.symbol === 'NVDA')!
-    check('blocked as entry.cooldown, verdict kept on the row', cool.outcome === 'blocked' && cool.rule === 'entry.cooldown' && cool.verdict?.action === 'buy', `${cool.rule}`)
+    const again = r4.tick.decisions.find((d) => d.symbol === 'NVDA')!
+    check('two minutes after the sell, a buy verdict fills again', again.outcome === 'filled' && again.rule === 'jev.buy' && again.fill?.side === 'buy', `${again.rule} ${again.outcome}`)
   }
 
   console.log('\n— a reversal alone closes the position —')

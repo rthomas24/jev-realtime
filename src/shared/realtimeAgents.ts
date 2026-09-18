@@ -122,8 +122,6 @@ export interface RealtimeGuardrails {
   sellThreshold: number
   /** Probability on the "sharp reversal against the position" question that closes it on its own. */
   reversalThreshold: number
-  /** Minutes after a sell before the same symbol may be bought again. */
-  reentryCooldownMin: number
   /** The horizon the direction question is asked over, in minutes. */
   horizonMin: number
   /** A buy is refused when the model puts more than this on "the price is extended / chasing". */
@@ -154,7 +152,6 @@ export const REALTIME_DEFAULTS: RealtimeGuardrails = {
   buyThreshold: 0.7,
   sellThreshold: 0.6,
   reversalThreshold: 0.85,
-  reentryCooldownMin: 10,
   horizonMin: 3,
   maxExtended: 0.6,
   minSetup: 1,
@@ -225,7 +222,6 @@ export type RealtimeRule =
   | 'entry.beforeWindow'
   | 'entry.afterWindow'
   | 'entry.extended'
-  | 'entry.cooldown'
   | 'lock.dailyLoss'
   | 'cap.cash'
   | 'size.tooSmall'
@@ -253,7 +249,6 @@ export const REALTIME_RULE_LABEL: Record<RealtimeRule, string> = {
   'entry.beforeWindow': 'Before the entry window',
   'entry.afterWindow': 'After the entry window',
   'entry.extended': 'Too far above VWAP',
-  'entry.cooldown': 'Re-entry cooldown',
   'lock.dailyLoss': 'Day loss lock',
   'cap.cash': 'No settled cash',
   'size.tooSmall': 'Order too small',
@@ -312,7 +307,6 @@ export interface RealtimeState {
   dayDate: string | null
   dayStartEquity: number | null
   buyLocked: boolean
-  lastSellAt: Record<string, string>
   lastQuotes: Record<string, number>
   lastTickAt: string | null
   lastError: string | null
@@ -339,7 +333,6 @@ export function emptyRealtimeState(allocation: number): RealtimeState {
     dayDate: null,
     dayStartEquity: null,
     buyLocked: false,
-    lastSellAt: {},
     lastQuotes: {},
     lastTickAt: null,
     lastError: null,
@@ -409,7 +402,6 @@ export function clampRealtimeGuardrails(g: Partial<RealtimeGuardrails> | undefin
     buyThreshold: clamp(num(src.buyThreshold, d.buyThreshold), 0.5, 0.99),
     sellThreshold: clamp(num(src.sellThreshold, d.sellThreshold), 0.5, 0.99),
     reversalThreshold: clamp(num(src.reversalThreshold, d.reversalThreshold), 0.5, 0.99),
-    reentryCooldownMin: clamp(Math.round(num(src.reentryCooldownMin, d.reentryCooldownMin)), 0, 240),
     horizonMin: clamp(Math.round(num(src.horizonMin, d.horizonMin)), 1, 60),
     maxExtended: clamp(num(src.maxExtended, d.maxExtended), 0.05, 1),
     minSetup: clamp(num(src.minSetup, d.minSetup), 0, 2),

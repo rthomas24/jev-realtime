@@ -75,13 +75,12 @@ export function entriesClosed(g: RealtimeGuardrails, state: Pick<RealtimeState, 
   return null
 }
 
-/** The per-symbol entry rules: cooldown after a sell, extension above VWAP. */
-export function entryBlocked(symbol: string, g: RealtimeGuardrails, state: Pick<RealtimeState, 'lastSellAt'>, last: number, vwap: number | null, now: Date): Refusal | null {
-  const soldAt = state.lastSellAt[symbol]
-  if (soldAt && g.reentryCooldownMin > 0) {
-    const waitedMin = (now.getTime() - Date.parse(soldAt)) / 60_000
-    if (waitedMin < g.reentryCooldownMin) return { rule: 'entry.cooldown', detail: `Sold ${Math.round(waitedMin)} min ago; ${g.reentryCooldownMin} min cooldown before re-entering.` }
-  }
+/**
+ * The per-symbol entry rule: extension above VWAP. There is deliberately no
+ * cooldown after a sell — a symbol that was just sold is judged on the tape
+ * in front of it like any other, and the model's threshold is the only gate.
+ */
+export function entryBlocked(g: RealtimeGuardrails, last: number, vwap: number | null): Refusal | null {
   if (g.maxEntryExtensionPct !== null && vwap && vwap > 0) {
     const ext = ((last - vwap) / vwap) * 100
     if (ext > g.maxEntryExtensionPct) return { rule: 'entry.extended', detail: `${ext.toFixed(2)}% above VWAP ${money(vwap)}; the limit is ${g.maxEntryExtensionPct}%.` }

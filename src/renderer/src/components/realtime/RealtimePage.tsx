@@ -9,6 +9,11 @@ import { formatEt, nextSessionOpen, sessionLabel, type SessionLabel } from '@sha
 import { shortSymbol } from '@shared/tickers'
 import {
   clampRealtimeGuardrails,
+  isContinuousMarket,
+  REALTIME_ASSET_CLASS_LABEL,
+  REALTIME_STREAM_LEG_OFF,
+  type AssetClass,
+  type RealtimeStreamLeg,
   REALTIME_DEFAULT_INTERVAL_SEC,
   REALTIME_DEFAULTS,
   REALTIME_MAX_INTERVAL_SEC,
@@ -194,9 +199,10 @@ function StreamRow(): JSX.Element {
     }
   }
   const state = stream?.state ?? 'off'
+  const crypto = stream?.crypto ?? REALTIME_STREAM_LEG_OFF
   return (
     <div className="shrink-0 hair-t px-5 py-2 flex items-center gap-3 text-xs">
-      <Radio size={12} className={cn('shrink-0', state === 'live' ? 'text-up' : 'text-muted')} />
+      <Radio size={12} className={cn('shrink-0', state === 'live' || crypto.state === 'live' ? 'text-up' : 'text-muted')} />
       <span className="font-medium shrink-0">Live data stream</span>
       {editing ? (
         <>
@@ -237,6 +243,13 @@ function StreamRow(): JSX.Element {
             {REALTIME_STREAM_FEED_LABEL[stream?.feed ?? 'iex']}
             {state === 'live' && stream ? ` · ${stream.symbols.join(' ')} · ${stream.trades.toLocaleString('en-US')} prints` : stream?.detail ? ` · ${stream.detail}` : ''}
           </span>
+          {crypto.state !== 'off' || crypto.symbols.length ? (
+            <>
+              <span className="text-text-3">·</span>
+              <span className={cn('pill', crypto.state === 'live' ? 'pill-up' : crypto.state === 'error' ? 'pill-warn' : '')}>Crypto {STREAM_STATE_LABEL[crypto.state] ?? crypto.state}</span>
+              <span className="text-muted truncate">{crypto.state === 'live' ? `${crypto.symbols.join(' ')} · ${crypto.trades.toLocaleString('en-US')} prints` : (crypto.detail ?? '')}</span>
+            </>
+          ) : null}
           <span className="flex-1" />
           <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
             Replace
@@ -336,7 +349,8 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
   const setG = (patch: Partial<RealtimeGuardrails>): void => setF((prev) => ({ ...prev, g: { ...prev.g, ...patch } }))
   const symbols = f.symbols.split(/[\s,]+/).filter(Boolean)
   const allocation = Number(f.allocation)
-  const kind = f.picked?.kind ?? (existing ? kindOf(existing) : 'stocks')
+  const kind: AssetClass = f.picked?.kind ?? (existing ? kindOf(existing) : 'stocks')
+  const continuous = isContinuousMarket(kind)
   const name = f.name.trim() || (f.picked ? shortSymbol(f.picked) : symbols[0]) || ''
   const problem = realtimeConfigProblem({ name, symbols, allocation: existing ? undefined : allocation, intervalSec: f.intervalSec, assetClass: kind })
   const submit = async (): Promise<void> => {
@@ -355,7 +369,7 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
   }
   return (
     <Sheet
-      title={existing ? `Settings · ${existing.symbols.join(' ')}` : 'Watch a stock'}
+      title={existing ? `Settings · ${existing.symbols.join(' ')}` : 'Watch a ticker'}
       onClose={onClose}
       width={520}
       footer={
@@ -399,19 +413,19 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
         <textarea className="input min-h-[64px] resize-y" value={f.style} onChange={(e) => set({ style: e.target.value })} placeholder="Buy breakouts above the opening range on heavy volume; take profits quickly; never chase an extended spike." aria-label="Standing order" />
       </Field>
 
-      <SectionHead title="Exits the engine enforces" hint="Checked in code on every tick, before the model is asked. The model cannot move them." className="mt-6" />
+      <SectionHead title="Exits the engine enforces" hint={continuous ? 'Checked in code on every tick, before the model is asked. The model cannot move them. Crypto trades around the clock, so nothing is flattened for a close.' : 'Checked in code on every tick, before the model is asked. The model cannot move them.'} className="mt-6" />
       <div className="card overflow-hidden divide-hair mb-5">
         <NumberField label="Stop-loss" value={f.g.stopLossPct} onChange={(v) => setG({ stopLossPct: v ?? REALTIME_DEFAULTS.stopLossPct })} suffix="%" min={0.1} max={20} />
         <NumberField label="Take-profit" value={f.g.takeProfitPct} onChange={(v) => setG({ takeProfitPct: v ?? REALTIME_DEFAULTS.takeProfitPct })} suffix="%" min={0.1} max={50} />
         <NumberField label="Trailing stop" hint="Below the high since entry. Blank turns it off." value={f.g.trailPct} onChange={(v) => setG({ trailPct: v })} suffix="%" min={0.1} max={20} nullable />
-        <TimeField label="Flatten everything at" hint="Out at market whatever the price — nothing is held into the close." value={f.g.flattenAt} onChange={(v) => setG({ flattenAt: v })} />
+        {!continuous && <TimeField label="Flatten everything at" hint="Out at market whatever the price — nothing is held into the close." value={f.g.flattenAt} onChange={(v) => setG({ flattenAt: v })} />}
       </div>
 
-      <SectionHead title="Entries" hint="When a buy verdict may become an order." />
+      <SectionHead title="Entries" hint={continuous ? 'When a buy verdict may become an order. No session windows — crypto never closes.' : 'When a buy verdict may become an order.'} />
       <div className="card overflow-hidden divide-hair mb-5">
         <NumberField label="Max position per symbol" hint="As a share of the allocation." value={f.g.maxPositionPct} onChange={(v) => setG({ maxPositionPct: v ?? REALTIME_DEFAULTS.maxPositionPct })} suffix="%" step={1} min={1} max={100} />
-        <TimeField label="No entries before" value={f.g.noEntriesBeforeEt} onChange={(v) => setG({ noEntriesBeforeEt: v })} />
-        <TimeField label="No entries after" value={f.g.noEntriesAfterEt} onChange={(v) => setG({ noEntriesAfterEt: v })} />
+        {!continuous && <TimeField label="No entries before" value={f.g.noEntriesBeforeEt} onChange={(v) => setG({ noEntriesBeforeEt: v })} />}
+        {!continuous && <TimeField label="No entries after" value={f.g.noEntriesAfterEt} onChange={(v) => setG({ noEntriesAfterEt: v })} />}
         <NumberField label="Max above VWAP" hint="A buy further above VWAP than this is refused as chasing. Blank turns it off." value={f.g.maxEntryExtensionPct} onChange={(v) => setG({ maxEntryExtensionPct: v })} suffix="%" min={0.1} max={20} nullable />
         <NumberField label="Re-entry cooldown" hint="After a sell in the same symbol." value={f.g.reentryCooldownMin} onChange={(v) => setG({ reentryCooldownMin: v ?? REALTIME_DEFAULTS.reentryCooldownMin })} suffix="min" step={1} min={0} max={240} />
         <NumberField label="Day loss lock" hint="Down this much of the allocation on the day and buys stop until tomorrow. Sells and exits keep working." value={f.g.maxDailyLossPct} onChange={(v) => setG({ maxDailyLossPct: v ?? REALTIME_DEFAULTS.maxDailyLossPct })} suffix="%" min={0.1} max={50} />
@@ -446,21 +460,29 @@ interface Step {
 function Readiness({ symbol, clock, continuous }: { symbol: string; clock: Clock; continuous: boolean }): JSX.Element {
   const key = useRealtime((s) => s.key)
   const stream = useRealtime((s) => s.stream)
-  const streamState = stream?.state ?? 'off'
-  const test = stream?.feed === 'test'
+  // Two sockets on one key: stocks (IEX/SIP/test) and crypto, which the
+  // engine also serves keyless from the public feed — so a crypto row is
+  // never blocked by a missing key, only slower.
+  const leg: RealtimeStreamLeg = (continuous ? stream?.crypto : stream) ?? REALTIME_STREAM_LEG_OFF
+  const streamState = leg.state
+  const test = !continuous && stream?.feed === 'test'
+  const tape: Step =
+    streamState === 'live'
+      ? { ok: true, title: 'Live tape', detail: `Stream live · ${continuous ? 'crypto' : (stream?.feed ?? 'iex').toUpperCase()}${leg.trades ? ` · ${leg.trades.toLocaleString('en-US')} prints` : ''}` }
+      : streamState === 'error'
+        ? { ok: false, warn: true, title: 'Live tape', detail: `Stream error — ${leg.detail ?? 'see the row below'}` }
+        : streamState === 'connecting' || streamState === 'reconnecting'
+          ? { ok: false, busy: true, title: 'Live tape', detail: `${streamState === 'connecting' ? 'Connecting' : 'Reconnecting'} to the stream…` }
+          : continuous
+            ? { ok: true, title: 'Live tape', detail: leg.detail ?? 'Polled from the public crypto feed every few seconds. Add your Alpaca key below for a live tape.' }
+            : !stream?.configured
+              ? { ok: false, title: 'Live tape', detail: 'Add your Alpaca Market Data key in the row below. The free plan streams IEX in real time; the Test feed prints a fake symbol around the clock.' }
+              : { ok: false, title: 'Live tape', detail: leg.detail ?? 'Stream off.' }
   const steps: Step[] = [
     key?.hasKey
       ? { ok: true, warn: Boolean(key.error), title: 'Model', detail: key.error ? `TypeSafe key stored — the last test failed: ${key.error}` : `TypeSafe key stored${key.models?.[0] ? ` · ${key.models[0]}` : ''}` }
       : { ok: false, title: 'Model', detail: 'Add your TypeSafe key in the bottom row. Without it the engine still enforces exits but makes no new decisions.' },
-    !stream?.configured
-      ? { ok: false, title: 'Live tape', detail: 'Add your Alpaca Market Data key in the row below. The free plan streams IEX in real time; the Test feed prints a fake symbol around the clock.' }
-      : streamState === 'live'
-        ? { ok: true, title: 'Live tape', detail: `Stream live · ${stream.feed.toUpperCase()}${stream.trades ? ` · ${stream.trades.toLocaleString('en-US')} prints` : ''}` }
-        : streamState === 'error'
-          ? { ok: false, warn: true, title: 'Live tape', detail: `Stream error — ${stream.detail ?? 'see the row below'}` }
-          : streamState === 'off'
-            ? { ok: false, title: 'Live tape', detail: stream.detail ?? 'Stream off.' }
-            : { ok: false, busy: true, title: 'Live tape', detail: `${streamState === 'connecting' ? 'Connecting' : 'Reconnecting'} to the stream…` },
+    tape,
     continuous || clock.session === 'open' || (test && streamState === 'live')
       ? { ok: true, title: 'Market', detail: continuous ? 'Trades around the clock' : clock.session === 'open' ? 'Regular session open' : 'Test feed — checks run around the clock' }
       : { ok: false, title: 'Market', detail: `${SESSION_LABEL[clock.session]} — opens ${formatEt(clock.nextOpen, true)}, in ${countdown(clock.nextOpen.toISOString(), clock.now)}.` }
@@ -475,13 +497,16 @@ function Readiness({ symbol, clock, continuous }: { symbol: string; clock: Clock
         ? 'The first price lands here the moment the stream is up.'
         : 'One thing to do before it can check.'
   const closedHint = !continuous && clock.session !== 'open' && !test && Boolean(stream?.configured) && streamState !== 'error'
+  const kindLabel = continuous ? 'crypto' : 'stock'
   return (
     <div className="max-w-[520px] w-full px-8 pointer-events-auto">
       <div className="flex items-center gap-2.5 mb-1">
         <span className={cn('h-2 w-2 rounded-full shrink-0', missing ? (missing.busy ? 'bg-accent' : 'bg-text-3') : 'bg-up')} aria-hidden />
         <h3 className="text-lg font-semibold tracking-[-0.01em] text-text">{headline}</h3>
       </div>
-      <p className="text-sm text-muted mb-5 leading-relaxed">{sub}</p>
+      <p className="text-sm text-muted mb-5 leading-relaxed">
+        {sub} <span className="text-text-3">Watching one {kindLabel}.</span>
+      </p>
       <div className="card divide-hair text-left">
         {steps.map((st) => (
           <div key={st.title} className="flex items-start gap-3 px-4 py-3">
@@ -512,10 +537,8 @@ interface WatchKey {
   symbol: string
 }
 
-/** What a row trades. Read tolerantly: configs written before the field existed are stocks. */
-function kindOf(cfg: RealtimeConfig): 'stocks' | 'crypto' {
-  return (cfg as { assetClass?: string }).assetClass === 'crypto' ? 'crypto' : 'stocks'
-}
+/** What a row trades. The store defaults configs written before the field to stocks. */
+const kindOf = (cfg: RealtimeConfig): AssetClass => cfg.assetClass ?? 'stocks'
 
 const SPARK_N = 90
 
@@ -571,7 +594,7 @@ function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary;
               {upnl !== null && <span className={cn('ml-1.5 font-medium', upnl >= 0 ? 'text-up' : 'text-down')}>{signedMoney(upnl)}</span>}
             </>
           ) : (
-            `${money(config.allocation, 0)} paper · every ${config.intervalSec}s${config.name !== symbol ? ` · ${config.name}` : ''}`
+            `${REALTIME_ASSET_CLASS_LABEL[kindOf(config)]} · ${money(config.allocation, 0)} paper · every ${config.intervalSec}s${config.name !== symbol ? ` · ${config.name}` : ''}`
           )}
         </span>
       </span>
@@ -797,7 +820,11 @@ export function RealtimePage(): JSX.Element {
         <span className={cn('pill no-drag', clock.session === 'open' ? 'pill-up' : '')} title={clock.session === 'open' ? undefined : `Opens in ${countdown(clock.nextOpen.toISOString(), clock.now)}`}>
           {sessionSentence(clock)}
         </span>
-        {stream?.state === 'live' && <span className="pill pill-up no-drag">Stream live</span>}
+        {(stream?.state === 'live' || stream?.crypto.state === 'live') && (
+          <span className="pill pill-up no-drag">
+            {stream.state === 'live' && stream.crypto.state === 'live' ? 'Streams live' : stream.crypto.state === 'live' ? 'Crypto live' : 'Stream live'}
+          </span>
+        )}
         <span className={cn('pill no-drag', model ? 'pill-accent' : key?.hasKey ? '' : 'pill-warn')} title={model ? 'The model the stored key can use' : undefined}>
           {model ?? (key?.hasKey ? 'key stored' : 'no model key')}
         </span>

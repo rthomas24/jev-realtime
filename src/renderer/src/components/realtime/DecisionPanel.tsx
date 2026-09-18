@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { money } from '@shared/ledger'
-import { REALTIME_RULE_LABEL, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeState } from '@shared/realtimeAgents'
+import { isContinuousMarket, REALTIME_RULE_LABEL, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeState } from '@shared/realtimeAgents'
 import { cn, signedMoney } from '@renderer/lib/format'
 
 /**
@@ -47,7 +47,8 @@ export function DecisionPanel({ config, symbol, latest, state }: { config: Realt
           {'> '}
           {config.style || 'Disciplined intraday momentum: buy strength confirmed by trend and volume, take profits at the target, cut losses at the stop.'}
           <br />
-          {'> '}long only · {g.stopLossPct}% stop · {g.takeProfitPct}% target{g.trailPct !== null ? ` · ${g.trailPct}% trail` : ''} · flat by {g.flattenAt} ET · buy ≥ {Math.round(g.buyThreshold * 100)}% · sell ≥ {Math.round(g.sellThreshold * 100)}%
+          {'> '}long only · {g.stopLossPct}% stop · {g.takeProfitPct}% target{g.trailPct !== null ? ` · ${g.trailPct}% trail` : ''}
+          {isContinuousMarket(config.assetClass) ? ' · no session, no flatten' : ` · flat by ${g.flattenAt} ET`} · buy ≥ {Math.round(g.buyThreshold * 100)}% · sell ≥ {Math.round(g.sellThreshold * 100)}%
         </div>
       </section>
 

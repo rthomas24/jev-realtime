@@ -792,10 +792,13 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
         </div>
         <Splitter width={detail.width} onResize={detail.set} onReset={detail.reset} grows="right" label="Verdict panel width" />
         <div className="shrink-0 min-h-0 flex flex-col card overflow-hidden" style={{ width: detail.width }}>
-          <div className="shrink-0">
+          {/* The verdict panel keeps its natural height while there is room and
+              scrolls once there is not, rather than being clipped by the card;
+              the feed keeps a floor so it never disappears entirely. */}
+          <div className="min-h-0 overflow-y-auto">
             <DecisionPanel config={config} symbol={symbol} latest={latest} judged={judged} state={state} />
           </div>
-          <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-[124px] flex flex-col">
             <Feed ticks={ticks} symbol={symbol} />
           </div>
         </div>

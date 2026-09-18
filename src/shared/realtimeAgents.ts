@@ -128,6 +128,10 @@ export interface RealtimeGuardrails {
   maxExtended: number
   /** A buy needs at least this setup-quality score (0 chop … 2 clean). */
   minSetup: number
+  /** A buy needs the symbol to be carrying moves at least this well today (0 chop … 2 trending). */
+  minRegime: number
+  /** A buy is refused when the model puts more than this on "this repeats an entry that already failed here today". */
+  maxRepeat: number
   /**
    * The model is re-asked only when a price has moved at least this % since
    * it last saw it, or `askAtLeastEverySec` has passed. The same situation
@@ -155,6 +159,8 @@ export const REALTIME_DEFAULTS: RealtimeGuardrails = {
   horizonMin: 3,
   maxExtended: 0.6,
   minSetup: 1,
+  minRegime: 0.8,
+  maxRepeat: 0.6,
   askMinMovePct: 0.02,
   askAtLeastEverySec: 10
 }
@@ -195,6 +201,12 @@ export interface RealtimeVerdict {
   extended?: number
   /** Setup quality, 0 chop … 2 clean, probability-weighted. Flat only. */
   setup?: number
+  /** How well the symbol is carrying moves today, 0 chop … 2 trending. Flat only. */
+  regime?: number
+  regimeProbabilities?: [number, number, number]
+  regimeConfidence?: number
+  /** P(a buy here repeats an entry that already failed in this symbol today). Flat only. */
+  repeatFail?: number
   /** The setup answer's spread over its three levels (chop, mixed, clean), and how peaked it was. Flat only. */
   setupProbabilities?: [number, number, number]
   setupConfidence?: number
@@ -215,6 +227,8 @@ export type RealtimeRule =
   | 'jev.trendBroken'
   | 'jev.extended'
   | 'jev.weakSetup'
+  | 'jev.chop'
+  | 'jev.repeat'
   | 'jev.belowThreshold'
   | 'jev.error'
   | 'jev.noKey'
@@ -242,6 +256,8 @@ export const REALTIME_RULE_LABEL: Record<RealtimeRule, string> = {
   'jev.trendBroken': 'Model: trend broken',
   'jev.extended': 'Model: extended',
   'jev.weakSetup': 'Model: weak setup',
+  'jev.chop': 'Model: chopping today',
+  'jev.repeat': 'Model: this already failed today',
   'jev.belowThreshold': 'Below the threshold',
   'jev.error': 'Model unavailable',
   'jev.noKey': 'No TypeSafe key',
@@ -423,6 +439,8 @@ export function clampRealtimeGuardrails(g: Partial<RealtimeGuardrails> | undefin
     horizonMin: clamp(Math.round(num(src.horizonMin, d.horizonMin)), 1, 60),
     maxExtended: clamp(num(src.maxExtended, d.maxExtended), 0.05, 1),
     minSetup: clamp(num(src.minSetup, d.minSetup), 0, 2),
+    minRegime: clamp(num(src.minRegime, d.minRegime), 0, 2),
+    maxRepeat: clamp(num(src.maxRepeat, d.maxRepeat), 0.05, 1),
     askMinMovePct: clamp(num(src.askMinMovePct, d.askMinMovePct), 0, 5),
     askAtLeastEverySec: clamp(Math.round(num(src.askAtLeastEverySec, d.askAtLeastEverySec)), 1, 600)
   }

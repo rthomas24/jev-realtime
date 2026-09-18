@@ -22,6 +22,35 @@ Both are entered in the app's bottom rows and stored encrypted with the OS keych
 - **Live data stream** — your own [Alpaca](https://alpaca.markets/) Market Data key, for stocks. The free plan streams IEX prints and quotes in real time; `sip` needs the paid plan; `test` streams a fake symbol (`FAKEPACA`) around the clock so the whole path can be watched with the market closed. The same key serves the polled snapshots and bars. Crypto needs no key at all (see below).
 - **TypeSafe key** — for Jev. Every check is one request with every symbol's questions in it (fan-out); output tokens are free and input is about a thousand tokens per symbol per call, billed at TypeSafe's list price of $0.042 per million input tokens.
 
+## What the model is told
+
+Every check hands Jev one state and asks every question about it at once. The state is what a trader at the desk would have in front of them, with every number already worked out in code and handed over as a described fact — Jev reads numbers as text and is weak at comparing them, so it is never asked to do arithmetic:
+
+- **The tape**, in words: the last print and how old it is, the touch and which side is stacked, the moves over the last ten seconds, minute and five minutes, who is hitting the book, and the pace.
+- **The bars and the trend**: moves over the last 5 / 15 / 30 / 60 minutes, the shape of the last few candles, volume against its usual pace, the opening range, the daily trend and RSI in words, the typical daily range.
+- **The position**, when there is one: how long it has been held, what it is worth, the high since entry, how far the price is from that high, and where the stop and target sit relative to the price now.
+- **The book**: its paper size, how much of it is at work and in what, and how the day is going.
+- **What it has already done here today**: every round trip closed in this symbol — the percentage, how long it was held, how long ago it closed, and how it ended (stopped out, hit the target, or closed by the model) — plus the tally, counted in code.
+- **How its own last reads aged**: the judgments it gave earlier on this symbol, and what the price did after each one.
+
+It is not told the stop and target percentages, the cadence, or the flatten time. Code enforces those and never asks about them, and unrelated material in the state costs accuracy.
+
+## The judgments, and the gates
+
+Each is its own question with its own probability, composed in code. A flat symbol is asked five, a held one three; they go in one request and are evaluated in parallel.
+
+| Judgment | Type | Asked when | The gate in code |
+| --- | --- | --- | --- |
+| Direction over the next few minutes | Choice (up / down / flat) | always | buy needs P(up) ≥ `buyThreshold`; a held position is closed at P(down) ≥ `sellThreshold` |
+| Is the price extended — would buying be chasing? | Noul | flat | refused at ≥ `maxExtended` |
+| How clean is the setup? | Score (chop / mixed / clean) | flat | needs ≥ `minSetup` |
+| How well is this symbol carrying a move today? | Score (chopping / mixed / trending) | flat | needs ≥ `minRegime` |
+| Would this repeat an entry that already failed here today? | Noul | flat | refused at ≥ `maxRepeat` |
+| Is it reversing against the position right now? | Noul | holding | closes it at ≥ `reversalThreshold` |
+| Is the move that justified the entry still intact? | Noul | holding | closes it at ≤ 1 − `sellThreshold` |
+
+The panel shows every one of them as a bar with its threshold marked, and then the checks in the order the engine applied them, so a refusal reads as a sentence: `up 76% ≥ 70% ✓ → extended 21% < 60% ✓ → setup 1.34 ≥ 1.0 ✓ → carrying 0.55 ≥ 0.8 ✗ → HOLD`.
+
 ## What a check costs, and what is not asked
 
 Jev is priced per input token, so the bill is the number of calls times the size of each one. Both are kept down on purpose, and both are shown: each row's stats line reads `calls · tokens · $ today · $ all time`, the header pill adds every agent up, and every tick in `ticks.jsonl` carries its `usage` and the versioned model id that answered.

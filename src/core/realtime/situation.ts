@@ -25,6 +25,10 @@ import { effectiveStop } from './policy'
  *  - every question for every symbol goes in ONE request (fan-out: parallel
  *    evaluation, no latency for the extra questions), speculative ones
  *    included, and code consumes only the applicable answers;
+ *  - the model is given what a trader at the desk would have: what it owns,
+ *    what the book has done today, how its OWN entries in this symbol have
+ *    worked out, and how its last reads aged — each a fact code computed,
+ *    each read by a question below;
  *  - the state carries nothing the questions do not read: the engine's
  *    exits, the cadence and the flatten time are enforced in code and never
  *    asked about, so they are not sent (unrelated state is context rot, and
@@ -38,6 +42,38 @@ import { effectiveStop } from './policy'
  * reader never guesses from a key.
  */
 
+/** One round trip the agent has already closed in this symbol today. */
+export interface ClosedTrade {
+  /** Gain or loss on the shares closed, in percent. */
+  pct: number
+  /** How long it was held, in minutes. */
+  minutes: number
+  /** How it ended, classified in code from the plan's own levels. */
+  ending: 'stopped out' | 'hit the target' | 'closed by the model'
+  /** Minutes since the sell. */
+  agoMin: number
+}
+
+/** A verdict the model gave earlier on this symbol, and what the price did after it. */
+export interface PastRead {
+  agoSec: number
+  /** The direction it picked, in the words it was asked in. */
+  said: 'up' | 'down' | 'flat'
+  probability: number
+  /** Move since that read, in percent. */
+  movedPct: number
+}
+
+/** The book as a whole, once per request — the `regime` question reads the day. */
+export interface BookInputs {
+  allocation: number
+  cash: number
+  positions: Position[]
+  /** The day's P&L as a percentage of the allocation; null before the day anchor is set. */
+  dayPct: number | null
+  buyLocked: boolean
+}
+
 export interface SymbolInputs {
   symbol: string
   quote: Quote
@@ -50,12 +86,18 @@ export interface SymbolInputs {
   secondsSincePrev?: number
   position: Position | null
   exit: RealtimeExit | null
+  /** Round trips already closed in this symbol today, newest first. */
+  closed?: ClosedTrade[]
+  /** The model's own last reads on this symbol, newest first. */
+  reads?: PastRead[]
 }
 
 export interface AskedSymbol {
   direction: string
   extended?: string
   setup?: string
+  regime?: string
+  repeat?: string
   reversal?: string
   intact?: string
 }
@@ -103,6 +145,30 @@ function volumeWords(v: number | null): string | null {
   if (v >= 1.3) return `heavy — ${v.toFixed(1)}× the usual pace`
   if (v >= 0.7) return `normal — ${v.toFixed(1)}× the usual pace`
   return `light — ${v.toFixed(1)}× the usual pace`
+}
+
+/**
+ * What the agent has already done here today, in words: each closed trade's
+ * result and how it ended, then the tally — counted in code, because the
+ * model does not count — and how its own last reads aged.
+ */
+function describeToday(s: SymbolInputs): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {}
+  const closed = s.closed ?? []
+  if (closed.length) {
+    out.closed_trades = closed.map((t) => `${signed(t.pct)} over ${t.minutes < 1 ? 'under a minute' : `${Math.round(t.minutes)} minute${Math.round(t.minutes) === 1 ? '' : 's'}`}, ${t.ending}, ${t.agoMin < 1 ? 'just now' : `${Math.round(t.agoMin)} min ago`}`)
+    const winners = closed.filter((t) => t.pct > 0).length
+    const stopped = closed.filter((t) => t.ending === 'stopped out').length
+    out.how_they_went =
+      closed.length === 1
+        ? `One trade here today: ${closed[0].pct > 0 ? 'it made money' : 'it lost money'}.`
+        : `${closed.length} trades here today: ${winners === 0 ? 'none made money' : winners === closed.length ? 'all made money' : `${winners} made money, ${closed.length - winners} lost`}${stopped ? `, ${stopped === closed.length ? 'every one was stopped out' : `${stopped} stopped out`}` : ''}.`
+  } else out.closed_trades = 'None — nothing has been traded in this symbol today.'
+  const reads = s.reads ?? []
+  if (reads.length) {
+    out.earlier_reads = reads.map((r) => `${r.agoSec < 90 ? `${Math.round(r.agoSec)} s ago` : `${Math.round(r.agoSec / 60)} min ago`} the judgment was "${r.said}" at ${Math.round(r.probability * 100)}%; the price is ${signed(r.movedPct, 3)} since.`)
+  }
+  return Object.keys(out).length ? out : null
 }
 
 /** Recent price changes from the intraday bars: "last 5 minutes: up 0.3%". */
@@ -228,10 +294,30 @@ function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guar
   const toClose = sessionCloseMinutes(clock.date) - clock.minutes
   const out: Record<string, unknown> = { price }
   if (s.tape) out.tape = describeTape(s.tape, nowMs, unit)
+  const today = describeToday(s)
+  if (today) out.today = today
   if (Object.keys(bars).length) out.five_minute_bars = bars
   if (Object.keys(trend).length) out.daily_trend = trend
   out.position = position
   out.time = continuous ? `${formatMinutes(clock.minutes)} ET, ${clock.weekday} — this market trades around the clock; "today" is the ET date` : `${formatMinutes(clock.minutes)} ET — ${sinceOpen} minutes since the open, ${toClose} minutes to the close`
+  return out
+}
+
+/**
+ * The book in words: its size, how much of it is at work and in what, and
+ * how the day has gone. The `regime` question reads the day; the rest is the
+ * frame a trader would have in front of them.
+ */
+function describeBook(b: BookInputs, cfg: RealtimeConfig, continuous: boolean): Record<string, unknown> {
+  const unit = continuous ? 'units' : 'shares'
+  const atWork = b.positions.reduce((sum, p) => sum + p.qty * p.avgCost, 0)
+  const pctAtWork = b.allocation > 0 ? Math.round((atWork / b.allocation) * 100) : 0
+  const out: Record<string, unknown> = {
+    paper_size: `${money(b.allocation, 0)} of paper money`,
+    at_work: b.positions.length === 0 ? 'Nothing open — the whole book is in cash.' : `${pctAtWork}% of the book is in ${b.positions.length === 1 ? 'one position' : `${b.positions.length} positions`}: ${b.positions.map((p) => `${p.symbol} ${p.qty} ${unit} from ${money(p.avgCost)}`).join(', ')}.`
+  }
+  if (b.dayPct !== null) out.today = `The book is ${signed(b.dayPct)} on the day, counting what is still open.`
+  if (b.buyLocked) out.note = 'Buying is locked for the rest of the day after the day-loss limit; only exits are left.'
   return out
 }
 
@@ -242,7 +328,7 @@ function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guar
  * flat ones entirely — a question whose answer cannot be used is tokens for
  * nothing.
  */
-export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], clock: EtClock, nowMs: number, flatAllowed: boolean): Situation {
+export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], clock: EtClock, nowMs: number, flatAllowed: boolean, book?: BookInputs): Situation {
   const g = cfg.guardrails
   const continuous = isContinuousMarket(cfg.assetClass)
   const instruments: Record<string, unknown> = {}
@@ -293,6 +379,8 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
     } else {
       q.extended = `${s.symbol}__extended`
       q.setup = `${s.symbol}__setup`
+      q.regime = `${s.symbol}__regime`
+      q.repeat = `${s.symbol}__repeat`
       questions[q.extended] = {
         type: 'noul',
         instructions: { question: `Is the price of \`${ref}\` EXTENDED — has the move already happened, so that buying now would be chasing?`, inspect: path, focus: 'Distance from VWAP and from where the move started, how fast the last minutes ran, and whether the tape is already cooling.' },
@@ -310,6 +398,32 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
           { summary: 'Clean — trend, flow and structure agree, with a nearby level to risk against.', signals: 'higher lows, buyers lifting the offer, holding above VWAP or the opening range, active pace' }
         ]
       }
+      questions[q.regime] = {
+        type: 'score',
+        instructions: {
+          question: `Judged on how ${path} has actually traded today, how well is it carrying a move right now?`,
+          inspect: [`\`${ref}.today\``, `\`${ref}.tape\``, `\`${ref}.five_minute_bars\``],
+          focus: 'The venue, not this entry: when a push starts here, does it go somewhere, or does it come straight back? The trader\'s own closed trades in `today.closed_trades` are evidence — entries that were stopped out soon after they were opened are what chop looks like from the inside.',
+          note: 'This is about the last hour or two of behaviour, not the daily trend.'
+        },
+        criteria: [
+          { summary: 'Chopping — pushes fail and come straight back; an entry is stopped out soon after it is opened.', signals: 'price crossing back and forth over VWAP, long wicks both ways, flow flipping between buyers and sellers, trades here today stopped out within minutes' },
+          { summary: 'Mixed — some follow-through, but moves are short-lived and give most of it back.', signals: 'a push that runs then fades to where it started, one winner and one loser on the day' },
+          { summary: 'Trending — a push carries: pullbacks hold above where they started and the move continues.', signals: 'higher lows through the session, pullbacks bought, trades here today that ran to their target' }
+        ]
+      }
+      questions[q.repeat] = {
+        type: 'noul',
+        instructions: {
+          question: `Would buying ${path} right now repeat an entry that has ALREADY failed in it today?`,
+          compare: [`\`${ref}.today.closed_trades\``, `\`${ref}.tape\``],
+          focus: 'Compare the tape now with the conditions behind the losing trades listed in `today`. The judgment is sameness, not whether the trade would lose.'
+        },
+        criteria: {
+          true: { what: 'Yes — the tape now looks like the tape that produced a loss here today.', examples: ['two entries stopped out earlier on pushes that faded, and this is another push of the same size into the same level', 'the losses came near the day high and the price is back at the day high'] },
+          false: { what: 'No — either nothing has failed here today, or the tape is materially different from when it did.', not_for: 'Any buy at all in a symbol that has had a loss — the conditions have to actually match.', examples: ['no trades closed here today', 'the earlier losses came in a flat two-sided tape; buyers are now lifting the offer on heavy volume'] }
+        }
+      }
     }
     asked[s.symbol] = q
   }
@@ -322,6 +436,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       rules: 'Long only, one position per instrument; a sell closes the whole position.'
     },
     session: continuous ? `Crypto spot market, open around the clock — ${clock.weekday} ${clock.date} in ET.` : `Regular US equity session, ${clock.weekday} ${clock.date}.`,
+    ...(book ? { book: describeBook(book, cfg, continuous) } : {}),
     instruments
   }
   return { state, questions, asked }

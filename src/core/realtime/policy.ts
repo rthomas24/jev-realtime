@@ -150,6 +150,8 @@ export function verdictIntent(v: RealtimeVerdict, holding: boolean, g: RealtimeG
   if (p('buy') >= g.buyThreshold) {
     if (v.extended !== undefined && v.extended >= g.maxExtended) return { intent: 'hold', rule: 'jev.extended', detail: `Up ${pctOf(p('buy'))}, but extended ${pctOf(v.extended)} ≥ ${pctOf(g.maxExtended)} — not chasing.` }
     if (v.setup !== undefined && v.setup < g.minSetup) return { intent: 'hold', rule: 'jev.weakSetup', detail: `Up ${pctOf(p('buy'))}, but setup ${v.setup.toFixed(2)} < ${g.minSetup} — waiting for a cleaner one.` }
+    if (v.regime !== undefined && v.regime < g.minRegime) return { intent: 'hold', rule: 'jev.chop', detail: `Up ${pctOf(p('buy'))}, but this symbol is carrying moves at only ${v.regime.toFixed(2)} < ${g.minRegime} today — chop takes the stop before the target.` }
+    if (v.repeatFail !== undefined && v.repeatFail >= g.maxRepeat) return { intent: 'hold', rule: 'jev.repeat', detail: `Up ${pctOf(p('buy'))}, but ${pctOf(v.repeatFail)} ≥ ${pctOf(g.maxRepeat)} that this repeats an entry that already failed here today.` }
     return { intent: 'buy', rule: 'jev.buy', detail: `Up ${pctOf(p('buy'))} ≥ ${pctOf(g.buyThreshold)}${v.setup !== undefined ? `, setup ${v.setup.toFixed(2)}` : ''}${v.extended !== undefined ? `, extended ${pctOf(v.extended)}` : ''}.` }
   }
   if (v.action === 'buy') return { intent: 'hold', rule: 'jev.belowThreshold', detail: `Up ${pctOf(p('buy'))} is under the ${pctOf(g.buyThreshold)} threshold — staying flat.` }

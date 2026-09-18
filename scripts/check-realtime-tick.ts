@@ -22,8 +22,9 @@ import { realtimeRuleLabel, clampRealtimeGuardrails, emptyRealtimeState, normCry
 import type { Decider } from '@core/realtime/jev'
 import { entriesClosed, entrySize, exitTrigger, newExit, verdictIntent } from '@core/realtime/policy'
 import { buildSituation } from '@core/realtime/situation'
-import { readVerdicts, runRealtimeTick } from '@core/realtime/tick'
+import { closedTradesToday, pastReads, readVerdicts, runRealtimeTick } from '@core/realtime/tick'
 import type { Quote } from '@shared/ipc'
+import type { RealtimeTick } from '@shared/realtimeAgents'
 
 let failures = 0
 const check = (name: string, ok: boolean, detail = ''): void => {
@@ -58,7 +59,7 @@ const q = (symbol: string, last: number): Quote => ({ symbol, last, bid: last - 
  * questions, with calm defaults (not extended, clean setup, no reversal,
  * trend intact) so a test that scripts only the direction reads as before.
  */
-function scripted(script: Record<string, { buy?: number; sell?: number; extended?: number; setup?: number; reversal?: number; intact?: number }>): Decider & { calls: number; askedKeys: string[]; lastRetries: number | undefined } {
+function scripted(script: Record<string, { buy?: number; sell?: number; extended?: number; setup?: number; regime?: number; repeat?: number; reversal?: number; intact?: number }>): Decider & { calls: number; askedKeys: string[]; lastRetries: number | undefined } {
   const d = {
     model: 'jev-test',
     calls: 0,
@@ -79,10 +80,10 @@ function scripted(script: Record<string, { buy?: number; sell?: number; extended
           const choice = Object.entries(p).sort((a, b) => b[1] - a[1])[0][0]
           answers[key] = { type: 'choice', choice, confidence: Math.max(...Object.values(p)), probabilities: p }
         } else if (qq.type === 'score') {
-          const setup = s.setup ?? 2
-          answers[key] = { type: 'score', score: setup, confidence: 0.8, probabilities: {}, legend: {} }
+          const value = kind === 'regime' ? (s.regime ?? 2) : (s.setup ?? 2)
+          answers[key] = { type: 'score', score: value, confidence: 0.8, probabilities: {}, legend: {} }
         } else {
-          const noul = kind === 'extended' ? (s.extended ?? 0.1) : kind === 'reversal' ? (s.reversal ?? 0.1) : kind === 'intact' ? (s.intact ?? 0.9) : 0.1
+          const noul = kind === 'extended' ? (s.extended ?? 0.1) : kind === 'repeat' ? (s.repeat ?? 0.05) : kind === 'reversal' ? (s.reversal ?? 0.1) : kind === 'intact' ? (s.intact ?? 0.9) : 0.1
           answers[key] = { type: 'noul', noul }
         }
       }
@@ -109,7 +110,7 @@ async function main(): Promise<void> {
       const ex = r.state.exits.NVDA
       return ex !== undefined && Math.abs(ex.stop - ex.entryPrice * 0.99) < 1e-6 && Math.abs(ex.target - ex.entryPrice * 1.02) < 1e-6
     })())
-    check('both symbols asked in ONE request — direction, extended and setup for each flat one', jev.calls === 1 && jev.askedKeys.join() === 'NVDA__direction,NVDA__extended,NVDA__setup,AAPL__direction,AAPL__extended,AAPL__setup', jev.askedKeys.join())
+    check('both symbols asked in ONE request — every flat judgment for each, and nothing serial', jev.calls === 1 && jev.askedKeys.join() === 'NVDA__direction,NVDA__extended,NVDA__setup,NVDA__regime,NVDA__repeat,AAPL__direction,AAPL__extended,AAPL__setup,AAPL__regime,AAPL__repeat', jev.askedKeys.join())
     check('the day anchor is set on the first tick', r.state.dayDate === DAY && r.state.dayStartEquity === 10_000)
 
     console.log('\n— holding: the model is asked sell-or-hold plus the reversal question —')
@@ -152,6 +153,12 @@ async function main(): Promise<void> {
     const a = ext.tick.decisions.find((x) => x.symbol === 'AAPL')!
     check('P(up)=0.90 but extended 0.80 ≥ 0.60 → held as jev.extended, nothing bought', n.outcome === 'held' && n.rule === 'jev.extended' && ext.state.ledger.positions.length === 0, `${n.rule}`)
     check('P(up)=0.90 but setup 0.40 < 1 → held as jev.weakSetup', a.outcome === 'held' && a.rule === 'jev.weakSetup', `${a.rule}`)
+    const chop = await run(base(), at('10:00'), [q('NVDA', 100), q('AAPL', 200)], scripted({ NVDA: { buy: 0.9, regime: 0.4 }, AAPL: { buy: 0.9, repeat: 0.8 } }))
+    const cn = chop.tick.decisions.find((x) => x.symbol === 'NVDA')!
+    const ca = chop.tick.decisions.find((x) => x.symbol === 'AAPL')!
+    check('P(up)=0.90 but the symbol is chopping (0.40 < 0.80) → held as jev.chop', cn.outcome === 'held' && cn.rule === 'jev.chop' && chop.state.ledger.positions.length === 0, `${cn.rule}`)
+    check('P(up)=0.90 but 80% that it repeats a failed entry → held as jev.repeat', ca.outcome === 'held' && ca.rule === 'jev.repeat', `${ca.rule}`)
+    check('both judgments ride on the verdict row', cn.verdict?.regime === 0.4 && ca.verdict?.repeatFail === 0.8)
     check('the verdict row carries every judgment', n.verdict?.extended === 0.8 && a.verdict?.setup === 0.4 && n.verdict?.probabilities.buy === 0.9)
     const held = await run(base(), at('10:00'), [q('NVDA', 100), q('AAPL', 200)], scripted({ NVDA: { buy: 0.9 } }))
     const broken = await run(held.state, at('10:01'), [q('NVDA', 100.3), q('AAPL', 200)], scripted({ NVDA: { sell: 0.1, intact: 0.3 } }))
@@ -283,6 +290,61 @@ async function main(): Promise<void> {
       [realtimeRuleLabel('entry.cooldown'), realtimeRuleLabel('lock.somethingNew'), realtimeRuleLabel('weird')].join(' / ')
     )
   }
+
+  console.log('\n— what the model is told about itself —')
+  {
+    const g = cfg.guardrails
+    const clock = { date: DAY, minutes: 600, weekday: 'Wed' as const, hour: 10, minute: 0, second: 0 }
+    const nowMs = Date.parse('2026-09-16T14:00:00.000Z')
+    // Two round trips already closed today: one stopped out, one at the target.
+    const led = {
+      ...emptyLedger(10_000),
+      fills: [
+        { id: 'b1', ts: '2026-09-16T13:30:00.000Z', symbol: 'NVDA', side: 'buy' as const, qty: 25, price: 100, realized: 0 },
+        { id: 's1', ts: '2026-09-16T13:34:00.000Z', symbol: 'NVDA', side: 'sell' as const, qty: 25, price: 99, realized: -25 },
+        { id: 'b2', ts: '2026-09-16T13:40:00.000Z', symbol: 'NVDA', side: 'buy' as const, qty: 25, price: 99, realized: 0 },
+        { id: 's2', ts: '2026-09-16T13:52:00.000Z', symbol: 'NVDA', side: 'sell' as const, qty: 25, price: 101, realized: 50 },
+        { id: 'b3', ts: '2026-09-15T13:40:00.000Z', symbol: 'NVDA', side: 'buy' as const, qty: 10, price: 90, realized: 0 },
+        { id: 's3', ts: '2026-09-15T13:50:00.000Z', symbol: 'NVDA', side: 'sell' as const, qty: 10, price: 95, realized: 50 }
+      ]
+    }
+    const trades = closedTradesToday(led, 'NVDA', DAY, g, nowMs)
+    check('the closed trades come back newest first, with the percentage derived from the sell alone', trades.length === 2 && trades[0].pct === 2.02 && trades[1].pct === -1, JSON.stringify(trades.map((t) => t.pct)))
+    check('how each one ended is classified in code against the plan\'s own levels', trades[0].ending === 'hit the target' && trades[1].ending === 'stopped out', trades.map((t) => t.ending).join(' / '))
+    check('how long it was held and how long ago it closed are in minutes', trades[0].minutes === 12 && Math.round(trades[0].agoMin) === 8, JSON.stringify([trades[0].minutes, trades[0].agoMin]))
+    check('yesterday\'s round trip is not today\'s', !trades.some((t) => t.pct === 5.56))
+
+    // The model's own last reads, and how they aged.
+    const tickAt = (iso: string, price: number, buy: number): RealtimeTick => ({ id: iso, at: iso, session: 'open', equity: 0, unrealized: 0, decisions: [{ symbol: 'NVDA', price, intent: 'hold', outcome: 'held', rule: 'jev.hold', detail: '', verdict: { action: 'buy', probabilities: { buy }, confidence: buy } }] })
+    const reads = pastReads([tickAt('2026-09-16T13:57:00.000Z', 100, 0.74), tickAt('2026-09-16T13:59:00.000Z', 101, 0.66), tickAt('2026-09-16T13:59:10.000Z', 101.5, 0.61)], 'NVDA', 102, nowMs)
+    check('the last reads come back newest first, thinned so two are not the same instant', reads.length === 2 && reads[0].agoSec === 50 && reads[1].agoSec === 180, JSON.stringify(reads.map((r) => r.agoSec)))
+    check('each read carries what it said and what the price did after it', reads[0].said === 'up' && reads[0].probability === 0.61 && reads[0].movedPct === 0.49 && reads[1].movedPct === 2, JSON.stringify(reads))
+
+    const sit = buildSituation(
+      cfg,
+      [{ symbol: 'NVDA', quote: q('NVDA', 102), analysis: null, intraBars: [], position: null, exit: null, closed: trades, reads }],
+      clock,
+      nowMs,
+      true,
+      { allocation: 10_000, cash: 7_500, positions: [{ symbol: 'AAPL', qty: 12, avgCost: 208.33 }], dayPct: -0.35, buyLocked: false }
+    )
+    const st = sit.state as { book: Record<string, string>; instruments: Record<string, { today: Record<string, unknown> }> }
+    const today = st.instruments.NVDA.today
+    check('the situation tells the model what it did here today, and how it went', /stopped out/.test(String((today.closed_trades as string[])[1])) && /2 trades here today: 1 made money, 1 lost, 1 stopped out/.test(String(today.how_they_went)), JSON.stringify(today.how_they_went))
+    check('and how its own last reads aged', /the judgment was "up" at 61%/.test(String((today.earlier_reads as string[])[0])), JSON.stringify(today.earlier_reads))
+    check('the book says its size, what is at work in it and how the day is going', /\$10,000/.test(st.book.paper_size) && /25% of the book is in one position: AAPL 12 shares from \$208.33/.test(st.book.at_work) && /down 0.35%/.test(st.book.today), JSON.stringify(st.book))
+    check('a flat symbol is asked the two new judgments, pointed at the history', sit.asked.NVDA.regime === 'NVDA__regime' && sit.asked.NVDA.repeat === 'NVDA__repeat' && JSON.stringify((sit.questions.NVDA__repeat as unknown as { instructions: { compare: string[] } }).instructions.compare) === '["`instruments.NVDA.today.closed_trades`","`instruments.NVDA.tape`"]')
+    check('the regime score offers three levels described as situations, not as degrees', (sit.questions.NVDA__regime as unknown as { criteria: { summary: string; signals: string }[] }).criteria.every((c) => c.summary.length > 40 && c.signals.length > 20))
+
+    // A held symbol gets the history too (it informs `intact`), but not the entry questions.
+    const heldSit = buildSituation(cfg, [{ symbol: 'NVDA', quote: q('NVDA', 102), analysis: null, intraBars: [], position: { symbol: 'NVDA', qty: 5, avgCost: 101 }, exit: newExit(101, g, '2026-09-16T13:58:00.000Z'), closed: trades, reads }], clock, nowMs, true)
+    check('a held symbol still sees the history, and is not asked the entry questions', (heldSit.state as { instruments: Record<string, { today?: unknown }> }).instruments.NVDA.today !== undefined && heldSit.asked.NVDA.regime === undefined && heldSit.asked.NVDA.repeat === undefined)
+    check('with no book passed, none is sent', (buildSituation(cfg, [], clock, nowMs, true).state as { book?: unknown }).book === undefined)
+    // A first check of the day: nothing traded, nothing read.
+    const fresh = buildSituation(cfg, [{ symbol: 'NVDA', quote: q('NVDA', 102), analysis: null, intraBars: [], position: null, exit: null, closed: [], reads: [] }], clock, nowMs, true)
+    check('a symbol with no history says so rather than going quiet', /Nothing has been traded|None — nothing/.test(String(((fresh.state as { instruments: Record<string, { today: Record<string, unknown> }> }).instruments.NVDA.today).closed_trades)))
+  }
+
 
   console.log('\n— the pure rules —')
   {

@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { money } from '@shared/ledger'
-import { isContinuousMarket, realtimeRuleLabel, realtimeModelCostUsd, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
+import { isContinuousMarket, realtimeRuleLabel, realtimeModelCostUsd, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick } from '@shared/realtimeAgents'
 import { cn, compactNumber, relTime, signedMoney, usd } from '@renderer/lib/format'
 
 /**
@@ -81,6 +81,22 @@ function Ring({ value, color }: { value: number; color: string }): JSX.Element {
   )
 }
 
+const SETUP_LEVELS = ['chop', 'mixed', 'clean'] as const
+const REGIME_LEVELS = ['chopping', 'mixed', 'trending'] as const
+
+/** The three level names under a score meter, lined up with its cells. */
+function LevelLabels({ levels }: { levels: readonly [string, string, string] }): JSX.Element {
+  return (
+    <div className="flex gap-2.5 pl-[76px] pr-[54px] -mt-0.5">
+      {levels.map((n) => (
+        <span key={n} className="flex-1 text-center text-2xs text-text-3">
+          {n}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 /** ✓ when the check lets the trade through, ✗ when it stops it, nothing when it is not a gate here. */
 function Glyph({ pass }: { pass?: boolean }): JSX.Element {
   return <span className={cn('w-3.5 shrink-0 text-center text-[11px] font-bold', pass === undefined ? 'text-text-3' : pass ? 'text-up' : 'text-down')}>{pass === undefined ? '' : pass ? '✓' : '✗'}</span>
@@ -105,31 +121,30 @@ function Gauge({ label, value, color, dim, on, marker, pass, hint, live }: { lab
 }
 
 /**
- * The setup score is a Score question: three described levels (chop, mixed,
- * clean), a probability on each, and the score as the weighted position
- * between them. Drawn as three cells filled by their probability with a pin
- * at the score; the tick is the minimum a buy needs.
+ * A Score question drawn as what it is: described levels, a probability on
+ * each, and the score as the weighted position between them. Three cells
+ * filled by their probabilities, a tick at the minimum a buy needs and a pin
+ * at the score itself. Both the setup and the regime answers are this shape.
  */
-function SetupMeter({ v, g, live }: { v: RealtimeVerdict; g: RealtimeGuardrails; live: boolean }): JSX.Element {
-  const score = v.setup ?? 0
+function ScoreMeter({ label, score, probabilities, confidence, minimum, levels, what, live }: { label: string; score: number; probabilities?: [number, number, number]; confidence?: number; minimum: number; levels: readonly [string, string, string]; what: string; live: boolean }): JSX.Element {
   const pos = useRolling(clamp01(score / 2))
-  const on = score >= g.minSetup
-  const pr = v.setupProbabilities
-  const hint = `Setup quality: how cleanly trend, flow and structure line up for a long entry with a defined risk. The model spreads its answer over three levels — chop, mixed, clean — and the score is the probability-weighted position from 0 to 2. A buy needs at least ${g.minSetup}.${pr ? ` Spread: chop ${pct(pr[0])}, mixed ${pct(pr[1])}, clean ${pct(pr[2])}.` : ''}${v.setupConfidence !== undefined ? ` Confidence ${v.setupConfidence.toFixed(2)}.` : ''}`
+  const on = score >= minimum
+  const pr = probabilities
+  const hint = `${what} The model spreads its answer over three levels — ${levels.join(', ')} — and the score is the probability-weighted position from 0 to 2. A buy needs at least ${minimum}.${pr ? ` Spread: ${levels.map((l, i) => `${l} ${pct(pr[i])}`).join(', ')}.` : ''}${confidence !== undefined ? ` Confidence ${confidence.toFixed(2)}.` : ''}`
   return (
     <div className="flex items-center gap-2.5 py-[3px]" title={hint}>
-      <span className="w-[66px] shrink-0 text-[13px] font-medium" style={{ color: ACCENT, opacity: on ? 1 : 0.5 }}>
-        setup
+      <span className="w-[66px] shrink-0 text-[13px] font-medium truncate" style={{ color: ACCENT, opacity: on ? 1 : 0.5 }}>
+        {label}
       </span>
       <div className="relative flex-1 min-w-0 h-3">
         <div className="absolute inset-0 flex gap-[3px]">
-          {(['chop', 'mixed', 'clean'] as const).map((name, i) => (
+          {levels.map((name, i) => (
             <div key={name} className="flex-1 rounded-full bg-surface-2 overflow-hidden" title={`${name}: ${pr ? pct(pr[i]) : '—'}`}>
               <div className={cn('h-full rounded-full rt-gauge', live && on && pr && pr[i] >= 0.5 && 'rt-gauge-live')} style={{ width: `${(pr ? clamp01(pr[i]) : 0) * 100}%`, background: ACCENT_DIM }} />
             </div>
           ))}
         </div>
-        <span className="absolute top-0 bottom-0 w-px rt-pin" style={{ left: `${clamp01(g.minSetup / 2) * 100}%`, background: 'var(--color-text)', opacity: 0.55 }} />
+        <span className="absolute top-0 bottom-0 w-px rt-pin" style={{ left: `${clamp01(minimum / 2) * 100}%`, background: 'var(--color-text)', opacity: 0.55 }} />
         <span className="absolute -top-[2px] -bottom-[2px] w-[3px] rounded-full rt-pin" style={{ left: `calc(${pos * 100}% - 1.5px)`, background: on ? ACCENT : 'var(--color-muted)' }} />
       </div>
       <span className="w-10 shrink-0 text-right mono text-[12.5px] font-medium nums">{(pos * 2).toFixed(2)}</span>
@@ -192,6 +207,8 @@ function chainFor(src: DecisionAt, g: RealtimeGuardrails): Chain {
   gate('up', pct(p('buy')), `≥ ${pct(g.buyThreshold)}`, p('buy') >= g.buyThreshold)
   if (v.extended !== undefined) gate('extended', pct(v.extended), `< ${pct(g.maxExtended)}`, v.extended < g.maxExtended)
   if (v.setup !== undefined) gate('setup', v.setup.toFixed(2), `≥ ${g.minSetup.toFixed(1)}`, v.setup >= g.minSetup)
+  if (v.regime !== undefined) gate('carrying', v.regime.toFixed(2), `≥ ${g.minRegime.toFixed(1)}`, v.regime >= g.minRegime)
+  if (v.repeatFail !== undefined) gate('repeat', pct(v.repeatFail), `< ${pct(g.maxRepeat)}`, v.repeatFail < g.maxRepeat)
   if (!open) return { gates, word: 'HOLD', tone: 'text' }
   // Every model gate passed: the engine's own rules had the last word.
   if (d.fill) return { gates, word: 'BUY', tone: 'up' }
@@ -331,23 +348,26 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
                 hint={a === 'buy' ? `P(higher after ${g.horizonMin} min by more than the noise). A buy needs at least ${pct(g.buyThreshold)}.` : a === 'sell' ? `P(lower after ${g.horizonMin} min by more than the noise). While holding, ${pct(g.sellThreshold)} or more closes the position.` : `P(about where it is after ${g.horizonMin} min — inside the ordinary noise, not enough to trade).`}
               />
             ))}
-            {!held && (v.extended !== undefined || v.setup !== undefined) && (
+            {!held && (v.extended !== undefined || v.setup !== undefined || v.regime !== undefined || v.repeatFail !== undefined) && (
               <>
                 <div className="eyebrow mt-2.5 mb-0.5 flex items-baseline gap-2">
                   <span>Before buying</span>
-                  <span className="normal-case tracking-normal font-normal text-text-3 truncate">is the move already over? · how clean is the setup?</span>
+                  <span className="normal-case tracking-normal font-normal text-text-3 truncate">is the move over? · how clean is it? · does this name pay today?</span>
                 </div>
                 {v.extended !== undefined && <Gauge label="extended" value={v.extended} on={v.extended >= g.maxExtended} color={WARN} dim={WARN_DIM} live={fresh} marker={g.maxExtended} pass={v.extended < g.maxExtended} hint={`P(the move has already happened, so a buy now would be chasing). A buy is refused at ${pct(g.maxExtended)} or more.`} />}
-                {v.setup !== undefined && <SetupMeter v={v} g={g} live={fresh} />}
                 {v.setup !== undefined && (
-                  <div className="flex gap-2.5 pl-[76px] pr-[54px] -mt-0.5">
-                    {['chop', 'mixed', 'clean'].map((n) => (
-                      <span key={n} className="flex-1 text-center text-2xs text-text-3">
-                        {n}
-                      </span>
-                    ))}
-                  </div>
+                  <>
+                    <ScoreMeter label="setup" score={v.setup} probabilities={v.setupProbabilities} confidence={v.setupConfidence} minimum={g.minSetup} levels={SETUP_LEVELS} live={fresh} what="Setup quality: how cleanly trend, flow and structure line up for a long entry with a defined risk." />
+                    <LevelLabels levels={SETUP_LEVELS} />
+                  </>
                 )}
+                {v.regime !== undefined && (
+                  <>
+                    <ScoreMeter label="carrying" score={v.regime} probabilities={v.regimeProbabilities} confidence={v.regimeConfidence} minimum={g.minRegime} levels={REGIME_LEVELS} live={fresh} what="How well this symbol has actually been carrying a move today, judged partly on how the agent's own trades in it turned out: chop takes the stop before the target." />
+                    <LevelLabels levels={REGIME_LEVELS} />
+                  </>
+                )}
+                {v.repeatFail !== undefined && <Gauge label="repeat" value={v.repeatFail} on={v.repeatFail >= g.maxRepeat} color={WARN} dim={WARN_DIM} live={fresh} marker={g.maxRepeat} pass={v.repeatFail < g.maxRepeat} hint={`P(a buy here repeats an entry that has already failed in this symbol today — the same tape that produced a loss). A buy is refused at ${pct(g.maxRepeat)} or more.`} />}
               </>
             )}
             {held && (

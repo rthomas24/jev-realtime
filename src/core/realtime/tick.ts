@@ -3,7 +3,7 @@ import type { Fill, Ledger } from '@shared/ledger'
 import { fillEconomics as fillEconomicsRaw, money, newId } from '@shared/ledger'
 import { settlesOn } from '@shared/settlement'
 import { etClock, isRegularSession, sessionLabel } from '@shared/marketTime'
-import { isContinuousMarket, REALTIME_RECENT_TICKS, realtimeEquity, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
+import { isContinuousMarket, REALTIME_RECENT_TICKS, realtimeEquity, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
 import { redactSecrets } from '../redact'
 import type { Bar } from '../market/feed'
 import type { TapeSnapshot } from '../market/tape'
@@ -12,7 +12,7 @@ import { analyzeSymbol } from '../market/indicators'
 import { lastSessionBars } from '../market/feed'
 import type { Decider } from './jev'
 import { dayLossLocked, entriesClosed, entryBlocked, entrySize, exitTrigger, newExit, quietBand, ratchetHigh, verdictIntent } from './policy'
-import { buildSituation, type Asked, type SymbolInputs } from './situation'
+import { buildSituation, type Asked, type BookInputs, type ClosedTrade, type PastRead, type SymbolInputs } from './situation'
 
 /**
  * One real-time tick, host-neutral: quotes and bars in, a new state and a
@@ -60,6 +60,60 @@ export interface TickResult {
 }
 
 const r2 = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * The round trips already closed in this symbol today, newest first, from
+ * the book's own fills. A sell's realized P&L and price give the cost basis
+ * it closed against, so the percentage needs nothing else stored; the buy
+ * before it gives how long it was held. How it ended is classified here
+ * against the plan's own levels — the model is told the outcome, never asked
+ * to work it out.
+ */
+export function closedTradesToday(ledger: Ledger, symbol: string, etDate: string, g: RealtimeGuardrails, nowMs: number, max = 4): ClosedTrade[] {
+  const mine = ledger.fills.filter((f) => f.symbol === symbol && f.ts.slice(0, 10) === etDate)
+  const out: ClosedTrade[] = []
+  for (let i = mine.length - 1; i >= 0 && out.length < max; i--) {
+    const sell = mine[i]
+    if (sell.side !== 'sell') continue
+    const basis = sell.qty * sell.price - sell.realized
+    if (!(basis > 0)) continue
+    const pct = r2((sell.realized / basis) * 100)
+    const buy = mine.slice(0, i).reverse().find((f) => f.side === 'buy')
+    const soldAt = Date.parse(sell.ts)
+    out.push({
+      pct,
+      minutes: buy ? Math.max(0, (soldAt - Date.parse(buy.ts)) / 60_000) : 0,
+      ending: pct <= -g.stopLossPct * 0.9 ? 'stopped out' : pct >= g.takeProfitPct * 0.9 ? 'hit the target' : 'closed by the model',
+      agoMin: Math.max(0, (nowMs - soldAt) / 60_000)
+    })
+  }
+  return out
+}
+
+/**
+ * The model's own last reads on this symbol and what the price did after
+ * them, newest first — its answer aging in public. Only reads far enough
+ * apart to be a different situation are shown.
+ */
+export function pastReads(recent: readonly RealtimeTick[], symbol: string, last: number, nowMs: number, max = 2): PastRead[] {
+  const out: PastRead[] = []
+  let lastAt = Infinity
+  for (let i = recent.length - 1; i >= 0 && out.length < max; i--) {
+    const d = recent[i].decisions.find((x) => x.symbol === symbol)
+    if (!d?.verdict || d.price === null || !(d.price > 0)) continue
+    const at = Date.parse(recent[i].at)
+    if (!(lastAt - at >= 20_000)) continue
+    lastAt = at
+    const v = d.verdict
+    out.push({
+      agoSec: Math.max(0, (nowMs - at) / 1000),
+      said: v.action === 'buy' ? 'up' : v.action === 'sell' ? 'down' : 'flat',
+      probability: v.probabilities[v.action] ?? 0,
+      movedPct: r2(((last - d.price) / d.price) * 100)
+    })
+  }
+  return out
+}
 
 export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
   const { cfg, now } = i
@@ -205,10 +259,19 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
       prevLast: prevQuotes[s],
       secondsSincePrev: prevAt !== null ? (now.getTime() - prevAt) / 1000 : undefined,
       position: pos,
-      exit: state.exits[s] ?? null
+      exit: state.exits[s] ?? null,
+      closed: closedTradesToday(ledger, s, clock.date, g, now.getTime()),
+      reads: pastReads(state.recent, s, q.last, now.getTime())
     }
   })
-  const situation = buildSituation(cfg, inputs, clock, now.getTime(), closed === null)
+  const bookState: BookInputs = {
+    allocation: cfg.allocation,
+    cash: ledger.cash,
+    positions: ledger.positions,
+    dayPct: state.dayStartEquity !== null && cfg.allocation > 0 ? r2(((marked.equity - state.dayStartEquity) / cfg.allocation) * 100) : null,
+    buyLocked: state.buyLocked
+  }
+  const situation = buildSituation(cfg, inputs, clock, now.getTime(), closed === null, bookState)
   const t0 = Date.now()
   let verdicts: Record<string, RealtimeVerdict> = {}
   try {
@@ -313,15 +376,31 @@ export function readVerdicts(answers: Record<string, unknown>, asked: Asked): Re
     if (rev !== undefined) v.reversal = rev
     const intact = noul(q.intact)
     if (intact !== undefined) v.trendIntact = intact
-    if (q.setup) {
-      const s = answers[q.setup] as { type?: string; score?: number; confidence?: number; probabilities?: Record<string, number> } | undefined
-      if (s && s.type === 'score' && typeof s.score === 'number') {
-        v.setup = r2(s.score)
-        if (typeof s.confidence === 'number') v.setupConfidence = r2(s.confidence)
-        const pr = s.probabilities
-        if (pr && ['0', '1', '2'].every((k) => typeof pr[k] === 'number')) v.setupProbabilities = [r2(pr['0']), r2(pr['1']), r2(pr['2'])]
+    const score = (key: string | undefined): { score: number; confidence?: number; probabilities?: [number, number, number] } | undefined => {
+      if (!key) return undefined
+      const s = answers[key] as { type?: string; score?: number; confidence?: number; probabilities?: Record<string, number> } | undefined
+      if (!s || s.type !== 'score' || typeof s.score !== 'number') return undefined
+      const pr = s.probabilities
+      return {
+        score: r2(s.score),
+        confidence: typeof s.confidence === 'number' ? r2(s.confidence) : undefined,
+        probabilities: pr && ['0', '1', '2'].every((k) => typeof pr[k] === 'number') ? [r2(pr['0']), r2(pr['1']), r2(pr['2'])] : undefined
       }
     }
+    const setup = score(q.setup)
+    if (setup) {
+      v.setup = setup.score
+      if (setup.confidence !== undefined) v.setupConfidence = setup.confidence
+      if (setup.probabilities) v.setupProbabilities = setup.probabilities
+    }
+    const regime = score(q.regime)
+    if (regime) {
+      v.regime = regime.score
+      if (regime.confidence !== undefined) v.regimeConfidence = regime.confidence
+      if (regime.probabilities) v.regimeProbabilities = regime.probabilities
+    }
+    const rep = noul(q.repeat)
+    if (rep !== undefined) v.repeatFail = rep
     out[symbol] = v
   }
   return out

@@ -439,6 +439,8 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
         <NumberField label="Buy when P(buy) ≥" value={f.g.buyThreshold} onChange={(v) => setG({ buyThreshold: v ?? REALTIME_DEFAULTS.buyThreshold })} step={0.05} min={0.5} max={0.99} />
         <NumberField label="Sell when P(sell) ≥" value={f.g.sellThreshold} onChange={(v) => setG({ sellThreshold: v ?? REALTIME_DEFAULTS.sellThreshold })} step={0.05} min={0.5} max={0.99} />
         <NumberField label="Sell on reversal ≥" hint="A separate yes/no question about a sharp reversal against the position; this alone closes it." value={f.g.reversalThreshold} onChange={(v) => setG({ reversalThreshold: v ?? REALTIME_DEFAULTS.reversalThreshold })} step={0.05} min={0.5} max={0.99} />
+        <NumberField label="Buy only if carrying ≥" hint="How well the symbol has been carrying moves today, 0 chop … 2 trending, judged partly on how this agent's own trades in it turned out." value={f.g.minRegime} onChange={(v) => setG({ minRegime: v ?? REALTIME_DEFAULTS.minRegime })} step={0.1} min={0} max={2} />
+        <NumberField label="Refuse a repeat at ≥" hint="Probability that a buy here repeats an entry that already failed in this symbol today." value={f.g.maxRepeat} onChange={(v) => setG({ maxRepeat: v ?? REALTIME_DEFAULTS.maxRepeat })} step={0.05} min={0.05} max={1} />
       </div>
 
       <SectionHead title="Model spend" hint="Every check that asks the model pays for its input tokens. A tape that has barely moved gets the last verdict instead — the same situation gets the same answer." />

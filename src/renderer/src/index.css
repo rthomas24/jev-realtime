@@ -1626,6 +1626,11 @@
 @keyframes rt-live { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
 .rt-chip { animation: rt-chip-in 0.32s ease-out both; }
 @keyframes rt-chip-in { from { opacity: 0; transform: translateY(5px) scale(0.96); } to { opacity: 1; transform: none; } }
+/* Where a dragged row or tile would land: a 2 px accent edge on that side. */
+.rt-drop-t { box-shadow: inset 0 2px 0 0 var(--color-accent); }
+.rt-drop-b { box-shadow: inset 0 -2px 0 0 var(--color-accent); }
+.rt-drop-l { box-shadow: inset 2px 0 0 0 var(--color-accent); }
+.rt-drop-r { box-shadow: inset -2px 0 0 0 var(--color-accent); }
 .rt-pip-new { animation: rt-pip-in 0.4s ease-out; transform-origin: bottom; }
 @keyframes rt-pip-in { from { transform: scaleY(0.2); opacity: 0.4; } to { transform: scaleY(1); opacity: 1; } }
 .rt-flash { animation: rt-flash 0.9s ease-out; }

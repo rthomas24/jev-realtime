@@ -6,6 +6,7 @@ import { cn, clockTime, compactNumber, countdown, money, relTime, signedMoney, u
 import { EmptyState, SectionHead } from '@renderer/components/common/Primitives'
 import { Field, Segmented, Sheet } from '@renderer/components/common/Sheet'
 import { Splitter, usePanelWidth } from '@renderer/components/common/Splitter'
+import { LayoutGrid, Rows3 } from 'lucide-react'
 import { etDateOf, formatEt, nextSessionOpen, sessionLabel, type SessionLabel } from '@shared/marketTime'
 import { shortSymbol } from '@shared/tickers'
 import {
@@ -28,15 +29,17 @@ import {
   realtimeUsage,
   sumRealtimeUsage,
   type RealtimeConfig,
-  type RealtimeDecision,
   type RealtimeGuardrails,
   type RealtimeStreamFeed,
-  type RealtimeSummary,
-  type RealtimeTick
+  type RealtimeSummary
 } from '@shared/realtimeAgents'
 import { RealtimeChart } from './RealtimeChart'
+import { RowActivity } from './Activity'
+import { SymbolGrid, type RowGroup } from './Grid'
+import { useSymbolDecisions } from './decisions'
+import { rowKey, useRowOrder, type Ordering, type RowKey } from './order'
 import { TickerPicker, type Picked } from './TickerPicker'
-import { DecisionPanel, type DecisionAt } from './DecisionPanel'
+import { DecisionPanel } from './DecisionPanel'
 import { Feed } from './Feed'
 
 /**
@@ -285,7 +288,6 @@ interface FormState {
 }
 
 const INTERVALS = [1, 2, 5, 10, 15, 30, 60].filter((n) => n >= REALTIME_MIN_INTERVAL_SEC && n <= REALTIME_MAX_INTERVAL_SEC)
-const NO_TICKS: RealtimeTick[] = []
 
 function fromConfig(cfg?: RealtimeConfig): FormState {
   return {
@@ -583,71 +585,7 @@ function sessionChange(points: PricePoint[]): number | null {
   return a > 0 ? ((b - a) / a) * 100 : null
 }
 
-/** The last few checks for one symbol as coloured pips, newest on the right. */
-const PIP_N = 18
-const PIP: Record<string, { cls: string; word: string }> = {
-  buy: { cls: 'bg-up', word: 'bought' },
-  sell: { cls: 'bg-down', word: 'sold' },
-  hold: { cls: 'bg-text-3/60', word: 'held' },
-  blocked: { cls: 'bg-warn/70', word: 'refused' },
-  quiet: { cls: 'bg-text-3/20', word: 'not asked' },
-  error: { cls: 'bg-down/40', word: 'failed' }
-}
-
-function pipKind(d: RealtimeDecision): keyof typeof PIP {
-  if (d.fill) return d.fill.side
-  if (d.outcome === 'error') return 'error'
-  if (d.outcome === 'blocked') return 'blocked'
-  if (d.outcome === 'quiet') return 'quiet'
-  return 'hold'
-}
-
-/**
- * What the agent has been doing in this symbol, without opening it: the last
- * checks as pips (a fill is a full-height bar in its own colour, a refusal
- * amber, a check that was not worth asking a faint stub), then today's fills
- * and what they made.
- */
-function RowActivity({ s, symbol }: { s: RealtimeSummary; symbol: string }): JSX.Element | null {
-  const pageTicks = useRealtime((x) => x.ticks[s.config.id]) ?? NO_TICKS
-  const ticks = pageTicks.length ? pageTicks : s.state.recent
-  const pips = useMemo(() => {
-    const out: { id: string; kind: keyof typeof PIP; title: string }[] = []
-    for (let i = ticks.length - 1; i >= 0 && out.length < PIP_N; i--) {
-      const d = ticks[i].decisions.find((x) => x.symbol === symbol)
-      if (!d) continue
-      const kind = pipKind(d)
-      out.push({ id: ticks[i].id, kind, title: `${clockTime(ticks[i].at)} · ${PIP[kind].word}${d.fill ? ` ${d.fill.qty} @ ${money(d.fill.price)}` : d.verdict ? ` · ${Math.round((d.verdict.probabilities[d.verdict.action] ?? 0) * 100)}%` : ''}` })
-    }
-    return out.reverse()
-  }, [ticks, symbol])
-  const today = useMemo(() => {
-    const day = s.state.dayDate
-    const fills = day ? s.state.ledger.fills.filter((f) => f.symbol === symbol && etDateOf(f.ts) === day) : []
-    return {
-      buys: fills.filter((f) => f.side === 'buy').length,
-      sells: fills.filter((f) => f.side === 'sell').length,
-      realized: Math.round(fills.reduce((sum, f) => sum + f.realized, 0) * 100) / 100
-    }
-  }, [s.state.ledger.fills, s.state.dayDate, symbol])
-  if (!pips.length) return null
-  const traded = today.buys + today.sells > 0
-  return (
-    <span className="flex items-center gap-2 mt-2">
-      <span className="flex items-end gap-[2px] h-3 shrink-0" title="The last checks in this symbol, newest on the right. A fill is a full bar, a refusal amber, a check that was not worth asking a faint stub.">
-        {pips.map((p, i) => (
-          <span key={`${p.id}:${i}`} title={p.title} className={cn('w-[3px] rounded-[1px]', PIP[p.kind].cls, p.kind === 'quiet' ? 'h-[4px]' : p.kind === 'hold' ? 'h-[7px]' : 'h-3', i === pips.length - 1 && 'rt-pip-new')} />
-        ))}
-      </span>
-      <span className="text-2xs text-text-3 nums truncate">
-        {traded ? `${today.buys} buy${today.buys === 1 ? '' : 's'} · ${today.sells} sell${today.sells === 1 ? '' : 's'} today` : 'no fills today'}
-      </span>
-      {traded && today.realized !== 0 && <span className={cn('text-2xs nums font-medium shrink-0', today.realized > 0 ? 'text-up' : 'text-down')}>{signedMoney(today.realized)}</span>}
-    </span>
-  )
-}
-
-function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary; symbol: string; points: PricePoint[]; active: boolean; onSelect: () => void }): JSX.Element {
+function WatchRow({ s, symbol, points, active, onSelect, ordering, keys }: { s: RealtimeSummary; symbol: string; points: PricePoint[]; active: boolean; onSelect: () => void; ordering: Ordering; keys: readonly RowKey[] }): JSX.Element {
   const { config, state } = s
   const last = points[points.length - 1]?.p ?? state.lastQuotes[symbol] ?? null
   const change = sessionChange(points)
@@ -655,8 +593,24 @@ function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary;
   const upnl = position && last ? (last - position.avgCost) * position.qty : null
   const running = config.status === 'running'
   const tone: 'up' | 'down' | 'muted' = change === null ? 'muted' : change >= 0 ? 'up' : 'down'
+  const key = rowKey(config.id, symbol)
+  const drag = ordering.dragProps(key, keys)
+  const over = ordering.over?.key === key ? ordering.over.side : null
   return (
-    <button type="button" onClick={onSelect} aria-current={active ? 'true' : undefined} className={cn('w-full block px-3 py-2.5 text-left rounded-lg', active ? 'bg-surface-2' : 'hover:bg-surface-2/60')}>
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+      {...drag}
+      title="Drag to reorder"
+      className={cn(
+        'w-full block px-3 py-2.5 text-left rounded-lg cursor-grab active:cursor-grabbing',
+        active ? 'bg-surface-2' : 'hover:bg-surface-2/60',
+        ordering.dragKey === key && 'opacity-40',
+        over === 'before' && 'rt-drop-t',
+        over === 'after' && 'rt-drop-b'
+      )}
+    >
       <span className="flex items-start gap-3">
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
@@ -690,31 +644,38 @@ function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary;
   )
 }
 
-function WatchList({ rows, active, onSelect, onNew, width }: { rows: { s: RealtimeSummary; symbol: string }[]; active: WatchKey | null; onSelect: (k: WatchKey) => void; onNew: () => void; width: number }): JSX.Element {
+function WatchList({ groups, empty, active, onSelect, onNew, width, ordering }: { groups: RowGroup[]; empty: boolean; active: WatchKey | null; onSelect: (k: WatchKey) => void; onNew: () => void; width: number; ordering: Ordering }): JSX.Element {
   const samples = useRealtime((x) => x.samples)
-  // Grouped by what they trade and nothing else: a name that is held keeps
-  // its place in the list (the row itself says it is long) instead of jumping
-  // to the top and back the moment a position opens or closes.
-  const stocks = rows.filter((r) => kindOf(r.s.config) === 'stocks')
-  const crypto = rows.filter((r) => kindOf(r.s.config) === 'crypto')
-  const section = (title: string, list: typeof rows): JSX.Element | null =>
-    list.length ? (
+  // A name is dragged within its own market: the two sections are separate
+  // lists, so dropping a coin among the stocks is simply not offered.
+  const section = (title: string, list: RowGroup['rows']): JSX.Element | null => {
+    const keys = list.map((r) => rowKey(r.s.config.id, r.symbol))
+    return list.length ? (
       <div className="mb-3">
         <div className="eyebrow px-3 pb-1.5">{title}</div>
         {list.map((r) => (
-          <WatchRow key={`${r.s.config.id}:${r.symbol}`} s={r.s} symbol={r.symbol} points={samples[r.symbol] ?? []} active={active?.id === r.s.config.id && active.symbol === r.symbol} onSelect={() => onSelect({ id: r.s.config.id, symbol: r.symbol })} />
+          <WatchRow
+            key={rowKey(r.s.config.id, r.symbol)}
+            s={r.s}
+            symbol={r.symbol}
+            points={samples[r.symbol] ?? []}
+            active={active?.id === r.s.config.id && active.symbol === r.symbol}
+            onSelect={() => onSelect({ id: r.s.config.id, symbol: r.symbol })}
+            ordering={ordering}
+            keys={keys}
+          />
         ))}
       </div>
     ) : null
+  }
   return (
     <aside className="panel shrink-0 min-h-0 flex flex-col hair-r" style={{ width }}>
       <div className="flex-1 min-h-0 overflow-y-auto py-3 px-2">
-        {rows.length === 0 ? (
+        {empty ? (
           <EmptyState icon={<Activity size={18} />} title="Nothing watched yet" body="Pick a ticker, a paper allocation and a cadence. The model answers up, down or flat on every check; the engine enforces the stops." action={<button className="btn btn-primary btn-sm" onClick={onNew}>Watch a stock</button>} />
         ) : (
           <>
-            {section('Stocks', stocks)}
-            {section('Crypto', crypto)}
+            {groups.map((g) => section(g.title, g.rows))}
           </>
         )}
       </div>
@@ -730,7 +691,6 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   const tickNow = useRealtime((x) => x.tickNow)
   const remove = useRealtime((x) => x.remove)
   const samples = useRealtime((x) => x.samples)
-  const pageTicks = useRealtime((x) => x.ticks[s.config.id]) ?? NO_TICKS
   const key = useRealtime((x) => x.key)
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<'reset' | 'delete' | null>(null)
@@ -741,25 +701,12 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   const day = realtimeDayPnl(state)
   const usage = realtimeUsage(state)
   const running = config.status === 'running'
-  const ticks = pageTicks.length ? pageTicks : state.recent
+  const { ticks, latest, judged } = useSymbolDecisions(config.id, symbol)
   const latencies = useMemo(() => ticks.map((t) => t.latencyMs).filter((n): n is number => typeof n === 'number'), [ticks])
   const lastLat = latencies.length ? latencies[latencies.length - 1] : null
   const avgLat = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null
   const fillsToday = state.ledger.fills.filter((f) => etDateOf(f.ts) === (state.dayDate ?? '')).length
   const firstToday = ticks.find((t) => t.at.slice(0, 10) === state.dayDate)?.at ?? null
-  // The newest decision for this symbol, and the newest one the model
-  // actually answered — on a quiet tick they differ, and the panel says so.
-  const { latest, judged } = useMemo(() => {
-    let latest: DecisionAt | null = null
-    let judged: DecisionAt | null = null
-    for (let i = ticks.length - 1; i >= 0 && !(latest && judged); i--) {
-      const d = ticks[i].decisions.find((x) => x.symbol === symbol)
-      if (!d) continue
-      latest ??= { tick: ticks[i], d }
-      if (d.verdict) judged ??= { tick: ticks[i], d }
-    }
-    return { latest, judged }
-  }, [ticks, symbol])
   const position = state.ledger.positions.find((p) => p.symbol === symbol) ?? null
   const exit = state.exits[symbol] ?? null
   const effectiveStop = exit ? Math.max(exit.stop, config.guardrails.trailPct !== null ? exit.high * (1 - config.guardrails.trailPct / 100) : 0) : null
@@ -880,6 +827,8 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
 /* ───────────────────────────── the page ───────────────────────────── */
 
 const SELECTED_SYMBOL_KEY = 'rt:selected-symbol'
+const VIEW_KEY = 'rt:view'
+type View = 'focus' | 'grid'
 
 export function RealtimePage(): JSX.Element {
   const booted = useRealtime((s) => s.booted)
@@ -894,11 +843,35 @@ export function RealtimePage(): JSX.Element {
   // The watchlist column: dragged wider for long labels, narrower for the chart.
   const list = usePanelWidth('rt:width:list', 300, 220, 560)
   const [symbolSel, setSymbolSel] = useState<string | null>(() => localStorage.getItem(SELECTED_SYMBOL_KEY))
+  const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) === 'grid' ? 'grid' : 'focus'))
+  const ordering = useRowOrder()
+  const showView = (v: View): void => {
+    setView(v)
+    localStorage.setItem(VIEW_KEY, v)
+  }
   const [sheet, setSheet] = useState<{ kind: 'none' } | { kind: 'new' } | { kind: 'edit'; id: string }>({ kind: 'none' })
   useEffect(() => {
     void boot()
   }, [boot])
-  const rows = useMemo(() => order.flatMap((id) => (agents[id] ? agents[id].config.symbols.map((symbol) => ({ s: agents[id], symbol })) : [])), [agents, order])
+  const rows = useMemo(() => {
+    const all = order.flatMap((id) => (agents[id] ? agents[id].config.symbols.map((symbol) => ({ s: agents[id], symbol })) : []))
+    return ordering.sort(all, (r) => rowKey(r.s.config.id, r.symbol))
+  }, [agents, order, ordering])
+  // One split for both views: by what they trade, in the operator's order.
+  // A name that is held keeps its place rather than jumping to a Positions
+  // group and back the moment a position opens or closes.
+  const groups: RowGroup[] = useMemo(
+    () =>
+      (
+        [
+          ['Stocks', 'stocks'],
+          ['Crypto', 'crypto']
+        ] as const
+      )
+        .map(([title, kind]) => ({ title, rows: rows.filter((r) => kindOf(r.s.config) === kind) }))
+        .filter((g) => g.rows.length > 0),
+    [rows]
+  )
   // The active row: the store's agent plus a symbol of it; anything stale falls back to the first row.
   const active: WatchKey | null = useMemo(() => {
     const own = rows.find((r) => r.s.config.id === selectedId && r.symbol === symbolSel) ?? rows.find((r) => r.s.config.id === selectedId) ?? rows[0]
@@ -939,14 +912,37 @@ export function RealtimePage(): JSX.Element {
             {usd(fleet.today.usd)} today · {usd(fleet.total.usd)} all time
           </span>
         )}
+        <span className="no-drag flex items-center rounded-lg bg-surface-2 p-0.5" role="group" aria-label="Layout">
+          {(
+            [
+              ['focus', Rows3, 'One at a time'],
+              ['grid', LayoutGrid, 'All of them at once']
+            ] as const
+          ).map(([v, Icon, title]) => (
+            <button key={v} type="button" title={title} aria-pressed={view === v} onClick={() => showView(v)} className={cn('h-7 w-8 grid place-items-center rounded-[6px]', view === v ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text')}>
+              <Icon size={14} />
+            </button>
+          ))}
+        </span>
         <button className="btn btn-primary btn-sm no-drag" onClick={() => setSheet({ kind: 'new' })}>
           <Plus size={13} /> Watch a stock
         </button>
       </header>
       <div className="flex-1 min-h-0 flex">
-        <WatchList rows={rows} active={active} onSelect={onSelect} onNew={() => setSheet({ kind: 'new' })} width={list.width} />
+        <WatchList groups={groups} empty={rows.length === 0} active={active} onSelect={onSelect} onNew={() => setSheet({ kind: 'new' })} width={list.width} ordering={ordering} />
         <Splitter width={list.width} onResize={list.set} onReset={list.reset} grows="left" label="Watchlist width" />
-        {selected && active ? (
+        {view === 'grid' && rows.length ? (
+          <SymbolGrid
+            groups={groups}
+            active={active}
+            onSelect={onSelect}
+            onOpen={(k) => {
+              onSelect(k)
+              showView('focus')
+            }}
+            ordering={ordering}
+          />
+        ) : selected && active ? (
           <Dashboard key={`${active.id}:${active.symbol}`} s={selected} symbol={active.symbol} clock={clock} onEdit={() => setSheet({ kind: 'edit', id: active.id })} />
         ) : (
           <div className="flex-1 min-w-0 flex items-center justify-center">

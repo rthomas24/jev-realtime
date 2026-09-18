@@ -1,8 +1,10 @@
 import type { JSX } from 'react'
-import { Fragment, useEffect, useRef, useState } from 'react'
-import { money } from '@shared/ledger'
-import { isContinuousMarket, realtimeRuleLabel, realtimeModelCostUsd, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick } from '@shared/realtimeAgents'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { money, type Position } from '@shared/ledger'
+import { realtimeRuleLabel, realtimeModelCostUsd, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeExit, type RealtimeGuardrails, type RealtimeState, type RealtimeTick } from '@shared/realtimeAgents'
 import { cn, compactNumber, relTime, signedMoney, usd } from '@renderer/lib/format'
+import { etDateOf } from '@shared/marketTime'
+import { liveEquity, useLivePrice } from './decisions'
 
 /**
  * The right column's top: everything the model handed back for the selected
@@ -239,6 +241,113 @@ function GateChain({ chain, id }: { chain: Chain; id: string }): JSX.Element {
   )
 }
 
+/* ───────────────────────────── the book, live ───────────────────────────── */
+
+/** A number that briefly tints when it moves, so a change is seen and not just read. */
+function useFlash(value: number): 'up' | 'down' | null {
+  const prev = useRef(value)
+  const [dir, setDir] = useState<'up' | 'down' | null>(null)
+  useEffect(() => {
+    if (value === prev.current) return
+    const next = value > prev.current ? 'up' : 'down'
+    prev.current = value
+    setDir(next)
+    const t = setTimeout(() => setDir(null), 700)
+    return () => clearTimeout(t)
+  }, [value])
+  return dir
+}
+
+/** One figure in the stat strip. */
+function Stat({ label, value, tone, title }: { label: string; value: string; tone?: 'up' | 'down' | 'muted'; title?: string }): JSX.Element {
+  return (
+    <div className="min-w-0" title={title}>
+      <div className="text-2xs text-text-3 uppercase tracking-[0.06em] truncate">{label}</div>
+      <div className={cn('mono text-[13px] nums font-medium truncate', tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : tone === 'muted' ? 'text-muted' : '')}>{value}</div>
+    </div>
+  )
+}
+
+/**
+ * Where the price sits between the stop the engine will take and the target
+ * it is working towards, with the entry marked. The bar is the trade: how
+ * much room is left before either level, at a glance and moving with the tape.
+ */
+function TradeBar({ price, entry, stop, target }: { price: number; entry: number; stop: number; target: number }): JSX.Element | null {
+  if (!(target > stop)) return null
+  const at = (n: number): number => clamp01((n - stop) / (target - stop)) * 100
+  const winning = price >= entry
+  return (
+    <div className="mt-2.5">
+      <div className="relative h-2 rounded-full bg-surface-2 overflow-hidden">
+        <div className="absolute inset-y-0 left-0 rt-gauge rounded-full" style={{ width: `${at(price)}%`, background: winning ? 'var(--color-up)' : 'var(--color-down)', opacity: 0.85 }} />
+        <span className="absolute inset-y-0 w-px bg-text/55" style={{ left: `${at(entry)}%` }} title={`Entry ${money(entry)}`} />
+      </div>
+      <div className="flex items-baseline justify-between mt-1 mono text-2xs nums text-text-3">
+        <span title={`Stop ${money(stop)} — the engine sells here`}>
+          {money(stop)} <span className="text-down">stop</span>
+        </span>
+        <span className="text-text-2">entry {money(entry)}</span>
+        <span title={`Target ${money(target)} — the engine takes profit here`}>
+          <span className="text-up">target</span> {money(target)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The top of the panel: what the book is worth this second. The big figure is
+ * the open trade's P&L when there is one and the day's when there is not,
+ * both marked at the price the chart is drawing rather than at the last
+ * decision's — so it moves with the tape, and a fill lands in it at once.
+ */
+function LiveBook({ config, symbol, state, position, exit }: { config: RealtimeConfig; symbol: string; state: RealtimeState; position: Position | null; exit: RealtimeExit | null }): JSX.Element {
+  const priceOf = useLivePrice()
+  const g = config.guardrails
+  const live = priceOf(symbol, state.lastQuotes[symbol]) ?? null
+  const { equity, unrealized } = liveEquity(state, priceOf)
+  const day = state.dayStartEquity !== null ? Math.round((equity - state.dayStartEquity) * 100) / 100 : null
+  const dayPct = state.dayStartEquity !== null && config.allocation > 0 ? (day! / config.allocation) * 100 : null
+  const openPnl = position && live ? (live - position.avgCost) * position.qty : null
+  const openPct = position && live ? ((live - position.avgCost) / position.avgCost) * 100 : null
+  const realizedToday = useMemo(() => {
+    const d = state.dayDate
+    return d ? Math.round(state.ledger.fills.filter((f) => etDateOf(f.ts) === d).reduce((sum, f) => sum + f.realized, 0) * 100) / 100 : 0
+  }, [state.ledger.fills, state.dayDate])
+  const hero = openPnl ?? day ?? 0
+  const heroPct = openPnl !== null ? openPct : dayPct
+  const shown = useRolling(hero, 320)
+  const flash = useFlash(Math.round(hero * 100))
+  const tone = hero > 0 ? 'up' : hero < 0 ? 'down' : 'muted'
+  const stop = exit ? Math.max(exit.stop, g.trailPct !== null ? exit.high * (1 - g.trailPct / 100) : 0) : null
+  return (
+    <section className={cn('px-4 pt-3 pb-3.5 hair-b', flash === 'up' && 'rt-tick-up', flash === 'down' && 'rt-tick-down')}>
+      <div className="flex items-baseline gap-2">
+        <span className="eyebrow">{position ? 'Open position' : 'Day'}</span>
+        {position && <span className="mono text-2xs text-text-3 nums">{position.qty} @ {money(position.avgCost)}</span>}
+        <span className="flex-1" />
+        <span className="mono text-sm nums text-text-2" title="The live price this panel is marking against">
+          {live !== null ? money(live) : '\u2014'}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-2.5 mt-0.5">
+        <span className={cn('mono text-[30px] leading-[1.05] font-semibold tracking-[-0.02em] nums', tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-muted')}>{signedMoney(shown)}</span>
+        {heroPct !== null && <span className={cn('mono text-base nums font-medium', tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-muted')}>{`${heroPct >= 0 ? '+' : ''}${heroPct.toFixed(2)}%`}</span>}
+      </div>
+      {position && exit && stop !== null && live !== null && <TradeBar price={live} entry={position.avgCost} stop={stop} target={exit.target} />}
+      <div className="grid grid-cols-3 gap-x-3 gap-y-2.5 mt-3">
+        <Stat label="Equity" value={money(equity)} title="Cash plus every position marked at its live price" />
+        <Stat label="Realized today" value={signedMoney(realizedToday)} tone={realizedToday > 0 ? 'up' : realizedToday < 0 ? 'down' : 'muted'} title="Profit and loss booked by today's sells" />
+        <Stat label="Realized all time" value={signedMoney(state.ledger.realizedPnl)} tone={state.ledger.realizedPnl > 0 ? 'up' : state.ledger.realizedPnl < 0 ? 'down' : 'muted'} />
+        <Stat label="Unrealized" value={signedMoney(unrealized)} tone={unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted'} title="Every open position, marked at the live price" />
+        <Stat label="Day" value={day === null ? '\u2014' : signedMoney(day)} tone={day === null ? 'muted' : day > 0 ? 'up' : day < 0 ? 'down' : 'muted'} title="Against the book's equity when the day opened" />
+        <Stat label="Cash" value={money(state.ledger.cash)} title={`Of ${money(config.allocation, 0)} allocated`} />
+      </div>
+    </section>
+  )
+}
+
 /* ───────────────────────────── the panel ───────────────────────────── */
 
 const QUIET = new Set(['quiet', 'quiet.band'])
@@ -259,21 +368,13 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
   const offered = v ? ORDER.filter((a) => v.probabilities[a] !== undefined) : []
   const held = v !== null && (v.reversal !== undefined || v.trendIntact !== undefined)
   const position = state.ledger.positions.find((p) => p.symbol === symbol) ?? null
+  const priceOf = useLivePrice()
   const tick = judged?.tick ?? null
   const usage = tick?.usage ?? null
   const flashKey = judged?.tick.id ?? 'none'
   return (
     <div className="flex flex-col">
-      <section className="px-4 py-3.5 hair-b">
-        <div className="eyebrow">Standing order</div>
-        <div className="mono text-xs leading-relaxed text-text-2 mt-1.5">
-          {'> '}
-          {config.style || 'Disciplined intraday momentum: buy strength confirmed by trend and volume, take profits at the target, cut losses at the stop.'}
-          <br />
-          {'> '}long only · {g.stopLossPct}% stop · {g.takeProfitPct}% target{g.trailPct !== null ? ` · ${g.trailPct}% trail` : ''}
-          {isContinuousMarket(config.assetClass) ? ' · no session, no flatten' : ` · flat by ${g.flattenAt} ET`} · buy ≥ {pct(g.buyThreshold)} · sell ≥ {pct(g.sellThreshold)}
-        </div>
-      </section>
+      <LiveBook config={config} symbol={symbol} state={state} position={position} exit={state.exits[symbol] ?? null} />
 
       <section key={flashKey} className={cn('px-4 py-3.5 hair-b', fresh && 'rt-flash')}>
         <div className="flex items-center gap-2 mb-1">
@@ -405,7 +506,7 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
         <section className="px-4 py-3 hair-b">
           <div className="eyebrow mb-1.5">Book</div>
           {state.ledger.positions.map((p) => {
-            const last = state.lastQuotes[p.symbol]
+            const last = priceOf(p.symbol, state.lastQuotes[p.symbol])
             const upnl = last ? (last - p.avgCost) * p.qty : null
             return (
               <div key={p.symbol} className="flex items-center gap-2 text-xs py-0.5 nums">

@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useRealtime } from '@renderer/store/realtimeStore'
-import type { RealtimeTick } from '@shared/realtimeAgents'
+import type { RealtimeState, RealtimeTick } from '@shared/realtimeAgents'
 import type { DecisionAt } from './DecisionPanel'
 
 /**
@@ -39,4 +39,36 @@ export function useSymbolDecisions(agentId: string, symbol: string): SymbolDecis
     }
     return { ticks, latest, judged }
   }, [ticks, symbol])
+}
+
+/**
+ * The price the page is drawing right now for a symbol: the newest sample if
+ * the stream has one, else the last price the engine decided against, else
+ * the position's own cost. Marks move with the tape rather than once a tick,
+ * which is the difference between a P&L that twitches every second and one
+ * that jumps when a decision lands.
+ */
+export function useLivePrice(): (symbol: string, fallback?: number) => number | null {
+  const samples = useRealtime((s) => s.samples)
+  return useCallback(
+    (symbol: string, fallback?: number): number | null => {
+      const pts = samples[symbol]
+      const live = pts?.length ? pts[pts.length - 1].p : undefined
+      return live ?? fallback ?? null
+    },
+    [samples]
+  )
+}
+
+/** Cash plus every position marked at the live price — the book as it stands this second. */
+export function liveEquity(state: Pick<RealtimeState, 'ledger' | 'lastQuotes'>, priceOf: (symbol: string, fallback?: number) => number | null): { equity: number; unrealized: number } {
+  let mv = 0
+  let unrealized = 0
+  for (const p of state.ledger.positions) {
+    const px = priceOf(p.symbol, state.lastQuotes[p.symbol] ?? p.avgCost) ?? p.avgCost
+    mv += p.qty * px
+    unrealized += (px - p.avgCost) * p.qty
+  }
+  const r2 = (n: number): number => Math.round(n * 100) / 100
+  return { equity: r2(state.ledger.cash + mv), unrealized: r2(unrealized) }
 }

@@ -1626,6 +1626,12 @@
 @keyframes rt-live { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
 .rt-chip { animation: rt-chip-in 0.32s ease-out both; }
 @keyframes rt-chip-in { from { opacity: 0; transform: translateY(5px) scale(0.96); } to { opacity: 1; transform: none; } }
+/* A figure that just moved: a tint that fades, so the eye catches the change. */
+.rt-tick-up { animation: rt-tick-up 0.7s ease-out; }
+.rt-tick-down { animation: rt-tick-down 0.7s ease-out; }
+@keyframes rt-tick-up { from { background: var(--tint-up); } to { background: transparent; } }
+@keyframes rt-tick-down { from { background: var(--tint-down); } to { background: transparent; } }
+
 /* Where a dragged row or tile would land: a 2 px accent edge on that side. */
 .rt-drop-t { box-shadow: inset 0 2px 0 0 var(--color-accent); }
 .rt-drop-b { box-shadow: inset 0 -2px 0 0 var(--color-accent); }
@@ -1637,7 +1643,7 @@
 @keyframes rt-flash { from { box-shadow: inset 0 0 0 1px var(--ring), inset 0 0 24px var(--ring-soft); } to { box-shadow: none; } }
 @media (prefers-reduced-motion: reduce) {
   .rt-slide, .rt-tag, .rt-bar, .rt-gauge, .rt-pin, .rt-ring { transition: none; }
-  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new, .rt-gauge-live::after, .rt-live-dot, .rt-chip, .rt-pip-new, .rt-flash { animation: none; }
+  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new, .rt-gauge-live::after, .rt-live-dot, .rt-chip, .rt-pip-new, .rt-flash, .rt-tick-up, .rt-tick-down { animation: none; }
   .rt-halo, .rt-ripple, .rt-riser, .rt-cell-glow { opacity: 0; }
 }
 

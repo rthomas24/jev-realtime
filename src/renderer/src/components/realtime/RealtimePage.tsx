@@ -12,7 +12,6 @@ import { shortSymbol } from '@shared/tickers'
 import {
   clampRealtimeGuardrails,
   isContinuousMarket,
-  REALTIME_ASSET_CLASS_LABEL,
   REALTIME_STREAM_LEG_OFF,
   type AssetClass,
   type RealtimeStreamLeg,
@@ -36,7 +35,7 @@ import {
 import { RealtimeChart } from './RealtimeChart'
 import { RowActivity } from './Activity'
 import { SymbolGrid, type RowGroup } from './Grid'
-import { useSymbolDecisions } from './decisions'
+import { liveEquity, useLivePrice, useSymbolDecisions } from './decisions'
 import { rowKey, useRowOrder, type Ordering, type RowKey } from './order'
 import { TickerPicker, type Picked } from './TickerPicker'
 import { DecisionPanel } from './DecisionPanel'
@@ -590,8 +589,13 @@ function WatchRow({ s, symbol, points, active, onSelect, ordering, keys }: { s: 
   const last = points[points.length - 1]?.p ?? state.lastQuotes[symbol] ?? null
   const change = sessionChange(points)
   const position = state.ledger.positions.find((p) => p.symbol === symbol) ?? null
-  const upnl = position && last ? (last - position.avgCost) * position.qty : null
   const running = config.status === 'running'
+  // What this agent is worth right now, marked at the price on screen: cash
+  // plus what it holds. Against its allocation, that is what its own buying
+  // and selling has made or lost.
+  const priceOf = useLivePrice()
+  const { equity } = liveEquity(state, priceOf)
+  const made = Math.round((equity - config.allocation) * 100) / 100
   const tone: 'up' | 'down' | 'muted' = change === null ? 'muted' : change >= 0 ? 'up' : 'down'
   const key = rowKey(config.id, symbol)
   const drag = ordering.dragProps(key, keys)
@@ -615,18 +619,18 @@ function WatchRow({ s, symbol, points, active, onSelect, ordering, keys }: { s: 
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="mono text-base font-semibold tracking-[-0.01em]">{symbol}</span>
+            {position && (
+              <span className="pill pill-accent" title={`Long ${position.qty} @ ${money(position.avgCost)}`}>
+                Long
+              </span>
+            )}
             {!running && <span className="pill">Paused</span>}
             {state.buyLocked && <span className="pill pill-warn">Locked</span>}
           </span>
-          <span className="block text-xs text-muted truncate mt-0.5">
-            {position ? (
-              <>
-                long {position.qty} @ {money(position.avgCost)}
-                {upnl !== null && <span className={cn('ml-1.5 font-medium', upnl >= 0 ? 'text-up' : 'text-down')}>{signedMoney(upnl)}</span>}
-              </>
-            ) : (
-              `${REALTIME_ASSET_CLASS_LABEL[kindOf(config)]} · ${money(config.allocation, 0)} paper · every ${config.intervalSec}s${config.name !== symbol ? ` · ${config.name}` : ''}`
-            )}
+          <span className="block text-xs truncate mt-0.5 nums" title={`Worth ${money(equity)} now: cash plus what it holds, marked live, against the ${money(config.allocation, 0)} it started with. Checked every ${config.intervalSec}s.`}>
+            <span className="mono font-medium text-text-2">{money(equity)}</span>
+            <span className={cn('ml-1.5 font-medium', made > 0 ? 'text-up' : made < 0 ? 'text-down' : 'text-text-3')}>{signedMoney(made)}</span>
+            <span className="text-text-3"> · every {config.intervalSec}s</span>
           </span>
         </span>
         <span className="pt-0.5">

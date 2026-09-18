@@ -23,8 +23,6 @@ import {
   REALTIME_MODEL_LABEL,
   REALTIME_STREAM_FEED_LABEL,
   realtimeConfigProblem,
-  realtimeDayPnl,
-  realtimeEquity,
   realtimeUsage,
   sumRealtimeUsage,
   type RealtimeConfig,
@@ -635,11 +633,7 @@ function WatchRow({ s, symbol, points, active, onSelect, ordering, keys }: { s: 
             {!running && <span className="pill">Paused</span>}
             {state.buyLocked && <span className="pill pill-warn">Locked</span>}
           </span>
-          <span className="block text-xs truncate mt-0.5 nums" title={`Worth ${money(equity)} now: cash plus what it holds, marked live, against the ${money(config.allocation, 0)} it started with. Checked every ${config.intervalSec}s.`}>
-            <span className="mono font-medium text-text-2">{money(equity)}</span>
-            <span className={cn('ml-1.5 font-medium', made > 0 ? 'text-up' : made < 0 ? 'text-down' : 'text-text-3')}>{signedMoney(made)}</span>
-            <span className="text-text-3"> · every {config.intervalSec}s</span>
-          </span>
+          <span className="block text-xs text-text-3 truncate mt-0.5">every {config.intervalSec}s</span>
         </span>
         <span className="pt-0.5">
           <Sparkline points={points} tone={tone} />
@@ -651,7 +645,12 @@ function WatchRow({ s, symbol, points, active, onSelect, ordering, keys }: { s: 
           </span>
         </span>
       </span>
-      <RowActivity s={s} symbol={symbol} />
+      {/* The row's full width, so the figure that matters is never the part that truncates. */}
+      <span className="flex items-baseline gap-2 mt-1.5 nums" title={`Worth ${money(equity)} now: cash plus what it holds, marked live, against the ${money(config.allocation, 0)} it started with.`}>
+        <span className="mono text-sm font-medium text-text-2">{money(equity)}</span>
+        <span className={cn('mono text-sm font-semibold', made > 0 ? 'text-up' : made < 0 ? 'text-down' : 'text-text-3')}>{signedMoney(made)}</span>
+      </span>
+      <RowActivity s={s} symbol={symbol} className="mt-1.5" />
     </button>
   )
 }
@@ -663,7 +662,7 @@ function WatchList({ groups, empty, active, onSelect, onNew, width, ordering }: 
   const section = (title: string, list: RowGroup['rows']): JSX.Element | null => {
     const keys = list.map((r) => rowKey(r.s.config.id, r.symbol))
     return list.length ? (
-      <div className="mb-3">
+      <div key={title} className="mb-3">
         <div className="eyebrow px-3 pb-1.5">{title}</div>
         {list.map((r) => (
           <WatchRow
@@ -709,8 +708,11 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   // The verdict-and-feed column: dragged wider to read the feed, narrower for the chart.
   const detail = usePanelWidth('rt:width:detail', 400, 300, 760)
   const { config, state } = s
-  const { equity } = realtimeEquity(state)
-  const day = realtimeDayPnl(state)
+  // Marked at the price on screen, as the panel beside it is — the two
+  // otherwise disagree by whatever the tape did since the last tick.
+  const priceOf = useLivePrice()
+  const { equity } = liveEquity(state, priceOf)
+  const day = state.dayStartEquity !== null ? Math.round((equity - state.dayStartEquity) * 100) / 100 : null
   const usage = realtimeUsage(state)
   const running = config.status === 'running'
   const { ticks, latest, judged } = useSymbolDecisions(config.id, symbol)

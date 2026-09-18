@@ -201,10 +201,13 @@ function chainFor(src: DecisionAt, g: RealtimeGuardrails): Chain {
   }
   if (held) {
     if (v.reversal !== undefined) gate('reversal', pct(v.reversal), `< ${pct(g.reversalThreshold)}`, v.reversal < g.reversalThreshold)
-    if (v.trendIntact !== undefined) gate('intact', pct(v.trendIntact), `> ${pct(1 - g.sellThreshold)}`, v.trendIntact > 1 - g.sellThreshold)
+    if (v.trendIntact !== undefined) gate('intact', pct(v.trendIntact), `> ${pct(g.minTrendIntact)}`, v.trendIntact > g.minTrendIntact)
     gate('down', pct(p('sell')), `< ${pct(g.sellThreshold)}`, p('sell') < g.sellThreshold)
-    const sold = !open
-    return { gates, word: sold ? 'SELL' : 'HOLD', tone: sold ? (d.fill ? 'down' : outcomeTone) : 'text', rule: d.fill ? undefined : sold ? realtimeRuleLabel(d.rule) : undefined }
+    if (d.fill) return { gates, word: 'SELL', tone: 'down' }
+    // A check that wanted out but was kept — too new to close, or waiting for
+    // its second read in a row — held; the chain says why rather than "SELL".
+    if (!open) return { gates, word: 'HOLD', tone: 'warn', rule: realtimeRuleLabel(d.rule) }
+    return { gates, word: 'HOLD', tone: 'text' }
   }
   gate('up', pct(p('buy')), `≥ ${pct(g.buyThreshold)}`, p('buy') >= g.buyThreshold)
   if (v.extended !== undefined) gate('extended', pct(v.extended), `< ${pct(g.maxExtended)}`, v.extended < g.maxExtended)
@@ -280,7 +283,8 @@ function TradeBar({ price, entry, stop, target }: { price: number; entry: number
   return (
     <div className="mt-2.5">
       <div className="relative h-2 rounded-full bg-surface-2 overflow-hidden">
-        <div className="absolute inset-y-0 left-0 rt-gauge rounded-full" style={{ width: `${at(price)}%`, background: winning ? 'var(--color-up)' : 'var(--color-down)', opacity: 0.85 }} />
+        {/* In flow, not absolute: `.rt-gauge` sets position: relative, which beats the utility. */}
+        <div className="h-full rt-gauge rounded-full" style={{ width: `${at(price)}%`, background: winning ? 'var(--color-up)' : 'var(--color-down)', opacity: 0.85 }} />
         <span className="absolute inset-y-0 w-px bg-text/55" style={{ left: `${at(entry)}%` }} title={`Entry ${money(entry)}`} />
       </div>
       <div className="flex items-baseline justify-between mt-1 mono text-2xs nums text-text-3">
@@ -478,7 +482,7 @@ export function DecisionPanel({ config, symbol, latest, judged, state }: { confi
                   <span className="normal-case tracking-normal font-normal text-text-3 truncate">is it turning against us? · does the reason to hold still stand?</span>
                 </div>
                 {v.reversal !== undefined && <Gauge label="reversal" value={v.reversal} on={v.reversal >= g.reversalThreshold} color={WARN} dim={WARN_DIM} live={fresh} marker={g.reversalThreshold} pass={v.reversal < g.reversalThreshold} hint={`P(a sharp reversal against the position right now — a decisive turn, not a pause). ${pct(g.reversalThreshold)} or more closes the position on its own.`} />}
-                {v.trendIntact !== undefined && <Gauge label="intact" value={v.trendIntact} on={v.trendIntact > 1 - g.sellThreshold} color="var(--color-up)" dim={DIM.buy} live={fresh} marker={1 - g.sellThreshold} pass={v.trendIntact > 1 - g.sellThreshold} hint={`P(the move that justified the entry is still intact: the trend and the flow that carried it are still there). At ${pct(1 - g.sellThreshold)} or less the position is closed.`} />}
+                {v.trendIntact !== undefined && <Gauge label="intact" value={v.trendIntact} on={v.trendIntact > g.minTrendIntact} color="var(--color-up)" dim={DIM.buy} live={fresh} marker={g.minTrendIntact} pass={v.trendIntact > g.minTrendIntact} hint={`P(the move that justified the entry is still intact: the trend and the flow that carried it are still there). At ${pct(g.minTrendIntact)} or less — on ${g.sellConfirmations} checks in a row, once the trade is ${g.minHoldSec} s old — the position is closed.`} />}
               </>
             )}
           </>

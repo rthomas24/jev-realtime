@@ -5,6 +5,7 @@ import { useRealtime, type PricePoint } from '@renderer/store/realtimeStore'
 import { cn, clockTime, countdown, money, relTime, signedMoney } from '@renderer/lib/format'
 import { EmptyState, SectionHead } from '@renderer/components/common/Primitives'
 import { Field, Segmented, Sheet } from '@renderer/components/common/Sheet'
+import { Splitter, usePanelWidth } from '@renderer/components/common/Splitter'
 import { formatEt, nextSessionOpen, sessionLabel, type SessionLabel } from '@shared/marketTime'
 import { shortSymbol } from '@shared/tickers'
 import {
@@ -608,7 +609,7 @@ function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary;
   )
 }
 
-function WatchList({ rows, active, onSelect, onNew }: { rows: { s: RealtimeSummary; symbol: string }[]; active: WatchKey | null; onSelect: (k: WatchKey) => void; onNew: () => void }): JSX.Element {
+function WatchList({ rows, active, onSelect, onNew, width }: { rows: { s: RealtimeSummary; symbol: string }[]; active: WatchKey | null; onSelect: (k: WatchKey) => void; onNew: () => void; width: number }): JSX.Element {
   const samples = useRealtime((x) => x.samples)
   const held = rows.filter((r) => r.s.state.ledger.positions.some((p) => p.symbol === r.symbol))
   const flat = rows.filter((r) => !held.includes(r))
@@ -624,7 +625,7 @@ function WatchList({ rows, active, onSelect, onNew }: { rows: { s: RealtimeSumma
       </div>
     ) : null
   return (
-    <aside className="panel w-[300px] shrink-0 min-h-0 flex flex-col hair-r">
+    <aside className="panel shrink-0 min-h-0 flex flex-col hair-r" style={{ width }}>
       <div className="flex-1 min-h-0 overflow-y-auto py-3 px-2">
         {rows.length === 0 ? (
           <EmptyState icon={<Activity size={18} />} title="Nothing watched yet" body="Pick a ticker, a paper allocation and a cadence. The model answers up, down or flat on every check; the engine enforces the stops." action={<button className="btn btn-primary btn-sm" onClick={onNew}>Watch a stock</button>} />
@@ -652,6 +653,8 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   const key = useRealtime((x) => x.key)
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<'reset' | 'delete' | null>(null)
+  // The verdict-and-feed column: dragged wider to read the feed, narrower for the chart.
+  const detail = usePanelWidth('rt:width:detail', 400, 300, 760)
   const { config, state } = s
   const { equity } = realtimeEquity(state)
   const day = realtimeDayPnl(state)
@@ -763,7 +766,8 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
             empty={<Readiness symbol={symbol} clock={clock} continuous={kindOf(config) === 'crypto'} />}
           />
         </div>
-        <div className="w-[400px] shrink-0 min-h-0 flex flex-col card overflow-hidden">
+        <Splitter width={detail.width} onResize={detail.set} onReset={detail.reset} grows="right" label="Verdict panel width" />
+        <div className="shrink-0 min-h-0 flex flex-col card overflow-hidden" style={{ width: detail.width }}>
           <div className="shrink-0">
             <DecisionPanel config={config} symbol={symbol} latest={latest} state={state} />
           </div>
@@ -790,6 +794,8 @@ export function RealtimePage(): JSX.Element {
   const key = useRealtime((s) => s.key)
   const stream = useRealtime((s) => s.stream)
   const clock = useSession()
+  // The watchlist column: dragged wider for long labels, narrower for the chart.
+  const list = usePanelWidth('rt:width:list', 300, 220, 560)
   const [symbolSel, setSymbolSel] = useState<string | null>(() => localStorage.getItem(SELECTED_SYMBOL_KEY))
   const [sheet, setSheet] = useState<{ kind: 'none' } | { kind: 'new' } | { kind: 'edit'; id: string }>({ kind: 'none' })
   useEffect(() => {
@@ -832,7 +838,8 @@ export function RealtimePage(): JSX.Element {
         </button>
       </header>
       <div className="flex-1 min-h-0 flex">
-        <WatchList rows={rows} active={active} onSelect={onSelect} onNew={() => setSheet({ kind: 'new' })} />
+        <WatchList rows={rows} active={active} onSelect={onSelect} onNew={() => setSheet({ kind: 'new' })} width={list.width} />
+        <Splitter width={list.width} onResize={list.set} onReset={list.reset} grows="left" label="Watchlist width" />
         {selected && active ? (
           <Dashboard key={`${active.id}:${active.symbol}`} s={selected} symbol={active.symbol} clock={clock} onEdit={() => setSheet({ kind: 'edit', id: active.id })} />
         ) : (

@@ -166,13 +166,13 @@ export function RealtimeChart({
     const area = `${line} L${pts[pts.length - 1][0].toFixed(1)} ${base} L${pts[0][0].toFixed(1)} ${base} Z`
 
     const cells: { key: number; x: number; fill: string; kind: Kind }[] = []
-    const beads: { key: number; x: number; y: number; fill: string }[] = []
+    const beads: { key: number; x: number; y: number; fill: string; side: 'buy' | 'sell'; price: number }[] = []
     series.forEach((s, i) => {
       const hit = byTime.get(s.t)
       if (!hit) return
       const kind = kindOf(hit.d)
       cells.push({ key: s.t, x: fx(i) - CELL_W / 2, fill: CELL_FILL[kind], kind })
-      if (hit.d.fill) beads.push({ key: s.t, x: fx(i), y: fy(s.p), fill: hit.d.fill.side === 'buy' ? 'var(--color-up)' : 'var(--color-down)' })
+      if (hit.d.fill) beads.push({ key: s.t, x: fx(i), y: fy(s.p), fill: hit.d.fill.side === 'buy' ? 'var(--color-up)' : 'var(--color-down)', side: hit.d.fill.side, price: hit.d.fill.price })
     })
     const ticksY = [0.25, 0.5, 0.75].map((f) => ({ y: PAD_TOP + plotH * f, label: fmt(lo + (1 - f) * range) }))
     // The position's levels: a dashed line where one sits inside the window,
@@ -284,7 +284,13 @@ export function RealtimeChart({
               <path d={model.area} fill={`url(#g${gid})`} />
               <path d={model.line} fill="none" stroke="var(--color-text)" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
               {model.beads.map((b) => (
-                <circle key={b.key} className={b.key === model.hot?.key ? 'rt-bead-pop' : undefined} cx={b.x} cy={b.y} r="3.2" fill={b.fill} opacity="0.85" />
+                <g key={b.key}>
+                  <circle className={b.key === model.hot?.key ? 'rt-bead-pop' : undefined} cx={b.x} cy={b.y} r="3.2" fill={b.fill} opacity="0.85" />
+                  {/* The fill's price beside its bead — buys above the line, sells below, so a quick round trip does not stack them. A surface-coloured halo keeps it legible over the line. */}
+                  <text className="mono" x={b.x} y={b.side === 'buy' ? b.y - 9 : b.y + 17} textAnchor="middle" fontSize="10.5" fontWeight="600" fill={b.fill} stroke="var(--color-surface)" strokeWidth="3" paintOrder="stroke" strokeLinejoin="round">
+                    {b.side === 'buy' ? 'B' : 'S'} {fmt(b.price)}
+                  </text>
+                </g>
               ))}
               {model.hot && (
                 <g key={model.hot.key}>

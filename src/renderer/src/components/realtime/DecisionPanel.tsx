@@ -58,6 +58,17 @@ export function DecisionPanel({ config, symbol, latest, state }: { config: Realt
           <span className="text-[28px] leading-[1.1] font-semibold tracking-[-0.01em]">{headline}</span>
           {headlinePct && <span className="mono text-[20px] leading-[1.1] font-medium nums">{headlinePct}</span>}
         </div>
+        {latest?.fill && (
+          // The fill itself, at a glance: the price in the fill's colour, then the size and what it made.
+          <div className="mono text-sm nums mb-3 -mt-1.5 flex items-baseline gap-2" style={{ color: headlineColor }}>
+            <span className="font-semibold text-[15px]">
+              {latest.fill.side === 'buy' ? 'bought' : 'sold'} @ {money(latest.fill.price)}
+            </span>
+            <span className="text-muted">× {latest.fill.qty}</span>
+            {latest.econ?.notional !== undefined && <span className="text-muted">{money(latest.econ.notional)}</span>}
+            {latest.econ?.realized !== undefined && <span className={cn('font-semibold', latest.econ.realized >= 0 ? 'text-up' : 'text-down')}>{signedMoney(latest.econ.realized)}</span>}
+          </div>
+        )}
         {offered.length ? (
           <>
             {offered.map((a) => (

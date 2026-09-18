@@ -28,8 +28,10 @@ const ROW_TINT: Record<Kind, string> = {
 /**
  * One row per check for the selected symbol, newest first: the time, the
  * word, the model's confidence and latency, and what happened — a fill with
- * its size and price (and, for a sell, what it made), or the rule that held
- * the verdict back. Every check the page holds is here; the list scrolls.
+ * its PRICE first and in bold (the number the eye is looking for; the size
+ * and, for a sell, what it made, follow and are what truncates when the
+ * column is narrow), or the rule that held the verdict back. Every check the
+ * page holds is here; the list scrolls.
  */
 export function Feed({ ticks, symbol }: { ticks: RealtimeTick[]; symbol: string }): JSX.Element {
   const rows = useMemo(() => {
@@ -55,10 +57,16 @@ export function Feed({ ticks, symbol }: { ticks: RealtimeTick[]; symbol: string 
             const kind = kindOf(d)
             const conf = d.verdict ? `conf ${Math.max(...Object.values(d.verdict.probabilities).map((v) => v ?? 0)).toFixed(2)}` : ''
             const lat = tick.latencyMs !== undefined && d.verdict ? `${Math.round(tick.latencyMs)}ms` : ''
-            let detail: string
+            let detail: JSX.Element | string
             let muted = false
             if (d.fill) {
-              detail = `${d.fill.side === 'buy' ? 'bought' : 'sold'} ${d.fill.qty} @ ${money(d.fill.price)}${d.econ?.realized !== undefined ? ` ${signedMoney(d.econ.realized)}` : ''}`
+              detail = (
+                <>
+                  <span className="font-bold">{money(d.fill.price)}</span>
+                  <span className="opacity-75"> × {d.fill.qty}</span>
+                  {d.econ?.realized !== undefined && <span className={cn('ml-2 font-semibold', d.econ.realized >= 0 ? 'text-up' : 'text-down')}>{signedMoney(d.econ.realized)}</span>}
+                </>
+              )
             } else if (kind === 'hold') {
               detail = d.price !== null ? `@ ${money(d.price)}` : ''
               muted = true
@@ -72,7 +80,7 @@ export function Feed({ ticks, symbol }: { ticks: RealtimeTick[]; symbol: string 
                 <span className={cn('w-11 shrink-0 font-bold', WORD_CLASS[kind])}>{WORD[kind]}</span>
                 <span className="w-[68px] shrink-0 text-text-3">{conf}</span>
                 <span className="w-11 shrink-0 text-text-3">{lat}</span>
-                <span className={cn('flex-1 min-w-0 truncate', muted ? 'text-text-3' : WORD_CLASS[kind], d.fill && 'font-semibold')}>{detail}</span>
+                <span className={cn('flex-1 min-w-0 truncate', muted ? 'text-text-3' : WORD_CLASS[kind])}>{detail}</span>
               </div>
             )
           })

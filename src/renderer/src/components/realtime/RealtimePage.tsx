@@ -6,6 +6,7 @@ import { cn, clockTime, countdown, money, relTime, signedMoney } from '@renderer
 import { EmptyState, SectionHead } from '@renderer/components/common/Primitives'
 import { Field, Segmented, Sheet } from '@renderer/components/common/Sheet'
 import { formatEt, nextSessionOpen, sessionLabel, type SessionLabel } from '@shared/marketTime'
+import { shortSymbol } from '@shared/tickers'
 import {
   clampRealtimeGuardrails,
   REALTIME_DEFAULT_INTERVAL_SEC,
@@ -25,6 +26,7 @@ import {
   type RealtimeTick
 } from '@shared/realtimeAgents'
 import { RealtimeChart } from './RealtimeChart'
+import { TickerPicker, type Picked } from './TickerPicker'
 import { DecisionPanel } from './DecisionPanel'
 import { Feed } from './Feed'
 
@@ -257,6 +259,8 @@ function StreamRow(): JSX.Element {
 interface FormState {
   name: string
   symbols: string
+  /** What the picker chose; the class rides to the engine on create. */
+  picked: Picked | null
   allocation: string
   intervalSec: number
   style: string
@@ -270,6 +274,7 @@ function fromConfig(cfg?: RealtimeConfig): FormState {
   return {
     name: cfg?.name ?? '',
     symbols: cfg?.symbols.join(', ') ?? '',
+    picked: cfg ? { symbol: cfg.symbols[0] ?? '', kind: kindOf(cfg), name: '' } : null,
     allocation: String(cfg?.allocation ?? 5000),
     intervalSec: cfg?.intervalSec ?? REALTIME_DEFAULT_INTERVAL_SEC,
     style: cfg?.style ?? '',
@@ -331,8 +336,9 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
   const setG = (patch: Partial<RealtimeGuardrails>): void => setF((prev) => ({ ...prev, g: { ...prev.g, ...patch } }))
   const symbols = f.symbols.split(/[\s,]+/).filter(Boolean)
   const allocation = Number(f.allocation)
-  const name = f.name.trim() || symbols[0] || ''
-  const problem = realtimeConfigProblem({ name, symbols, allocation: existing ? undefined : allocation, intervalSec: f.intervalSec })
+  const kind = f.picked?.kind ?? (existing ? kindOf(existing) : 'stocks')
+  const name = f.name.trim() || (f.picked ? shortSymbol(f.picked) : symbols[0]) || ''
+  const problem = realtimeConfigProblem({ name, symbols, allocation: existing ? undefined : allocation, intervalSec: f.intervalSec, assetClass: kind })
   const submit = async (): Promise<void> => {
     if (problem) return setError(problem)
     setBusy(true)
@@ -340,7 +346,7 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
       const g = clampRealtimeGuardrails(f.g)
       const err = existing
         ? await updateAgent(existing.id, { name, symbols, intervalSec: f.intervalSec, style: f.style, guardrails: g })
-        : await createAgent({ name, symbols, allocation, intervalSec: f.intervalSec, style: f.style, guardrails: g })
+        : await createAgent({ name, symbols, allocation, intervalSec: f.intervalSec, style: f.style, guardrails: g, assetClass: kind })
       if (err) setError(err)
       else onClose()
     } finally {
@@ -366,11 +372,17 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
         </div>
       }
     >
-      <Field label="Ticker" hint="One stock per row. Watch another with the button in the header.">
-        <input className="input mono text-lg uppercase" value={f.symbols} onChange={(e) => set({ symbols: e.target.value.toUpperCase() })} placeholder="NVDA" autoFocus aria-label="Ticker" />
-      </Field>
+      {existing ? (
+        <Field label="Ticker" hint="Fixed for this row. Watch another with the button in the header.">
+          <input className="input mono text-lg" value={f.symbols} readOnly aria-label="Ticker" />
+        </Field>
+      ) : (
+        <Field label="What to watch" hint="Tap a chip, or search by ticker or company name. One row per name.">
+          <TickerPicker value={f.picked} onPick={(p) => set({ picked: p, symbols: p.symbol })} />
+        </Field>
+      )}
       <Field label="Label" hint="Optional. Defaults to the ticker.">
-        <input className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder={symbols[0] || 'NVDA'} aria-label="Label" />
+        <input className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder={f.picked ? shortSymbol(f.picked) : symbols[0] || 'NVDA'} aria-label="Label" />
       </Field>
       {!existing && (
         <Field label="Paper allocation" hint="Simulated money. A position is sized from this and the per-symbol limit below.">

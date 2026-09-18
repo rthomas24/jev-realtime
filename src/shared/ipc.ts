@@ -1,3 +1,4 @@
+import type { AssetInfo } from './tickers'
 import type { RealtimeCreateRequest, RealtimeKeyStatus, RealtimePriceSample, RealtimeState, RealtimeStreamKeyRequest, RealtimeStreamStatus, RealtimeSummary, RealtimeTick, RealtimeUpdateRequest } from './realtimeAgents'
 
 /** One quote, as every price source hands it over. */
@@ -29,6 +30,7 @@ export const IpcChannels = {
   realtimeStreamStatus: 'realtime:streamStatus',
   realtimeSetStreamKey: 'realtime:setStreamKey',
   realtimeClearStreamKey: 'realtime:clearStreamKey',
+  realtimeAssets: 'realtime:assets',
   openExternal: 'shell:openExternal'
 } as const
 
@@ -61,6 +63,8 @@ export interface TbApi {
     streamStatus(): Promise<RealtimeStreamStatus>
     setStreamKey(req: RealtimeStreamKeyRequest): Promise<RealtimeStreamStatus>
     clearStreamKey(): Promise<RealtimeStreamStatus>
+    /** Every tradable asset the stored market-data key can see, for the picker; `[]` without a key. */
+    assets(): Promise<AssetInfo[]>
     onEvent(cb: (e: RealtimeEvent) => void): () => void
   }
   openExternal(url: string): Promise<void>

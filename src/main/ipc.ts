@@ -2,6 +2,7 @@ import { ipcMain, shell, type BrowserWindow } from 'electron'
 import { IpcChannels, REALTIME_EVENT_CHANNEL } from '@shared/ipc'
 import type { RealtimeCreateRequest, RealtimeStreamKeyRequest, RealtimeUpdateRequest } from '@shared/realtimeAgents'
 import { realtimeEngine } from './realtime/RealtimeEngine'
+import { liveAssets } from './assets'
 
 let registered = false
 
@@ -28,6 +29,7 @@ export function registerIpc(win: BrowserWindow): () => void {
     ipcMain.handle(IpcChannels.realtimeStreamStatus, () => realtimeEngine.streamStatus())
     ipcMain.handle(IpcChannels.realtimeSetStreamKey, (_e, req: RealtimeStreamKeyRequest) => realtimeEngine.setStreamKey(req))
     ipcMain.handle(IpcChannels.realtimeClearStreamKey, () => realtimeEngine.clearStreamKey())
+    ipcMain.handle(IpcChannels.realtimeAssets, () => liveAssets())
     ipcMain.handle(IpcChannels.openExternal, (_e, url: string) => {
       const u = String(url ?? '')
       if (/^https?:\/\//.test(u)) return shell.openExternal(u)

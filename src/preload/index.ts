@@ -24,6 +24,7 @@ const api: TbApi = {
     streamStatus: () => ipcRenderer.invoke(IpcChannels.realtimeStreamStatus),
     setStreamKey: (req) => ipcRenderer.invoke(IpcChannels.realtimeSetStreamKey, req),
     clearStreamKey: () => ipcRenderer.invoke(IpcChannels.realtimeClearStreamKey),
+    assets: () => ipcRenderer.invoke(IpcChannels.realtimeAssets),
     onEvent: (cb) => on<RealtimeEvent>(REALTIME_EVENT_CHANNEL, cb)
   },
   openExternal: (url) => ipcRenderer.invoke(IpcChannels.openExternal, url)

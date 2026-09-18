@@ -7,6 +7,7 @@
  * Run: `npm run check`
  */
 import { alpacaErrorIsFatal, alpacaStreamUrl, parseAlpacaMessages } from '@core/market/alpacaStream'
+import { coinbaseProductId, coinbaseSymbol, parseCoinbaseMessages } from '@core/market/coinbase'
 import { SymbolTape, tapeQuote } from '@core/market/tape'
 
 let failures = 0
@@ -36,15 +37,27 @@ console.log('— the wire —')
   check('malformed frames yield nothing rather than throwing', parseAlpacaMessages('{not json').length === 0 && parseAlpacaMessages('null').length === 0)
   check('a single object frame is accepted too', parseAlpacaMessages(JSON.stringify({ T: 'success', msg: 'connected' }))[0]?.kind === 'connected')
   check('the feed picks the url', alpacaStreamUrl('iex') === 'wss://stream.data.alpaca.markets/v2/iex' && alpacaStreamUrl('test') === 'wss://stream.data.alpaca.markets/v2/test')
-  check('crypto has its own socket, on the Kraken-backed location', alpacaStreamUrl('crypto') === 'wss://stream.data.alpaca.markets/v1beta3/crypto/us-1')
-  // The crypto socket's frames: the same shape, a pair for a symbol, a taker side on the trade, fractional sizes.
-  const cryptoFrame = JSON.stringify([
-    { T: 't', S: 'BTC/USD', p: 76527.1, s: 0.000083, t: '2026-09-18T01:24:19.550166609Z', i: 8012479237256725631, tks: 'S' },
-    { T: 'q', S: 'BTC/USD', bp: 76506.74, bs: 0.00099017, ap: 76518.619, as: 0.000995, t: '2026-09-18T01:26:14.698211979Z' }
-  ])
-  const c = parseAlpacaMessages(cryptoFrame)
-  check('a crypto trade parses with its pair and fractional size', c[0].kind === 'trade' && c[0].symbol === 'BTC/USD' && c[0].trade.p === 76527.1 && c[0].trade.s === 0.000083)
-  check('a crypto quote parses with fractional sizes', c[1].kind === 'quote' && c[1].quote.bid === 76506.74 && c[1].quote.askSize === 0.000995)
+}
+
+console.log('\n— the crypto wire (Coinbase Exchange, public) —')
+{
+  check('symbols map both ways: BTC/USD and BTC-USD', coinbaseProductId('BTC/USD') === 'BTC-USD' && coinbaseSymbol('BTC-USD') === 'BTC/USD' && coinbaseSymbol('eth-usd') === 'ETH/USD')
+  const frames = [
+    { type: 'subscriptions', channels: [{ name: 'matches', product_ids: ['BTC-USD'], account_ids: null }, { name: 'ticker', product_ids: ['BTC-USD', 'ETH-USD'], account_ids: null }] },
+    { type: 'ticker', sequence: 136286070602, product_id: 'BTC-USD', price: '76653.76', open_24h: '76298.04', best_bid: '76653.76', best_bid_size: '0.00780927', best_ask: '76653.77', best_ask_size: '0.0421', side: 'buy', time: '2026-09-18T01:45:20.123456Z', trade_id: 1094404894, last_size: '0.00002149' },
+    { type: 'last_match', trade_id: 1094404894, side: 'buy', size: '0.00002149', price: '76653.76', product_id: 'BTC-USD', sequence: 136286070602, time: '2026-09-18T01:45:20.123456Z' },
+    { type: 'match', trade_id: 1094404895, side: 'sell', size: '0.00000032', price: '76653.75', product_id: 'BTC-USD', sequence: 136286070934, time: '2026-09-18T01:45:20.523456Z' },
+    { type: 'heartbeat', product_id: 'BTC-USD', sequence: 1, last_trade_id: 1, time: '2026-09-18T01:45:21Z' },
+    { type: 'error', message: 'Failed to subscribe', reason: 'NOPE-USD is not a valid product' }
+  ].map((m) => parseCoinbaseMessages(JSON.stringify(m))[0])
+  check('every message type is recognised', frames.map((x) => x.kind).join() === 'subscriptions,quote,trade,trade,heartbeat,error', frames.map((x) => x.kind).join())
+  check('the subscription lists the pairs as the engine names them', frames[0].kind === 'subscriptions' && frames[0].symbols.join() === 'BTC/USD,ETH/USD')
+  const q = frames[1]
+  check('a ticker is the touch with sizes, numbers from strings', q.kind === 'quote' && q.symbol === 'BTC/USD' && q.quote.bid === 76653.76 && q.quote.ask === 76653.77 && q.quote.bidSize === 0.00780927 && q.quote.askSize === 0.0421 && q.quote.t === Date.parse('2026-09-18T01:45:20.123456Z'))
+  const t = frames[3]
+  check('a match is a print with its instant, price and fractional size', t.kind === 'trade' && t.symbol === 'BTC/USD' && t.trade.p === 76653.75 && t.trade.s === 0.00000032)
+  check('an error carries its reason', frames[5].kind === 'error' && /NOPE-USD/.test(frames[5].message))
+  check('malformed frames yield nothing rather than throwing', parseCoinbaseMessages('{not json').length === 0 && parseCoinbaseMessages('null').length === 0)
 }
 
 console.log('\n— the tape —')

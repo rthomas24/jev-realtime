@@ -50,7 +50,7 @@ const STALE_PRINT_MS = 20 * 60_000
 const BARS_PAGE_LIMIT = 10_000
 const BARS_MAX_PAGES = 5
 
-/** One symbol's snapshot as Alpaca's stocks and crypto endpoints both shape it. */
+/** One symbol's snapshot as Alpaca's snapshot endpoint shapes it. */
 export interface AlpacaSnapshot {
   latestTrade?: { p?: number; t?: string }
   latestQuote?: { bp?: number; ap?: number; t?: string }
@@ -69,28 +69,12 @@ export interface AlpacaRawBar {
   v: number
 }
 
-/**
- * A snapshot as the quote shape every consumer takes; null without a usable
- * price. With `markAtMid` (crypto), a two-sided quote NEWER than the last
- * trade marks the symbol at its mid: a thin pair's last print can be minutes
- * old while its book moves every second, and a price that never moves reads
- * as "nothing moved" to the tick.
- */
-export function alpacaSnapshotToQuote(symbol: string, s: AlpacaSnapshot, at: number, opts: { markAtMid?: boolean } = {}): Quote | null {
-  let last = s.latestTrade?.p ?? s.minuteBar?.c ?? s.dailyBar?.c
-  let ts = s.latestTrade?.t
-  const bp = s.latestQuote?.bp
-  const ap = s.latestQuote?.ap
-  if (opts.markAtMid && typeof bp === 'number' && typeof ap === 'number' && bp > 0 && ap >= bp && s.latestQuote?.t) {
-    const tradeAt = ts ? Date.parse(ts) : 0
-    if (Date.parse(s.latestQuote.t) > tradeAt) {
-      last = (bp + ap) / 2
-      ts = s.latestQuote.t
-    }
-  }
+/** A snapshot as the quote shape every consumer takes; null without a usable price. */
+export function alpacaSnapshotToQuote(symbol: string, s: AlpacaSnapshot, at: number): Quote | null {
+  const last = s.latestTrade?.p ?? s.minuteBar?.c ?? s.dailyBar?.c
   if (!(typeof last === 'number' && last > 0)) return null
   const prevClose = s.prevDailyBar?.c
-  const q: Quote = { symbol, last, ts: ts ?? new Date(at).toISOString() }
+  const q: Quote = { symbol, last, ts: s.latestTrade?.t ?? new Date(at).toISOString() }
   if (typeof s.latestQuote?.bp === 'number' && s.latestQuote.bp > 0) q.bid = s.latestQuote.bp
   if (typeof s.latestQuote?.ap === 'number' && s.latestQuote.ap > 0) q.ask = s.latestQuote.ap
   if (typeof prevClose === 'number' && prevClose > 0) {

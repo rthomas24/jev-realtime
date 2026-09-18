@@ -25,9 +25,9 @@ import {
 import type { RealtimeEvent } from '@shared/ipc'
 import type { Bar, PriceFeed } from '@core/market/feed'
 import { alpacaFeed } from '@core/market/alpaca'
-import { alpacaCryptoFeed } from '@core/market/alpacaCrypto'
 import { alpacaStream, type MarketStream } from '@core/market/alpacaStream'
-import { SymbolTape, tapeQuote, type TapeSnapshot } from '@core/market/tape'
+import { coinbaseFeed, coinbaseStream } from '@core/market/coinbase'
+import { SymbolTape, tapeQuote, type TapeQuote, type TapeSnapshot, type TapeTrade } from '@core/market/tape'
 import { testTypesafeKey, typesafeDecider, type Decider } from '@core/realtime/jev'
 import { runRealtimeTick } from '@core/realtime/tick'
 import { redactSecrets } from '@core/redact'
@@ -44,9 +44,9 @@ import { realtimeStore } from './store'
  * call, and the model behind one cached client per key.
  *
  * Two asset classes, two of everything that touches a vendor: a stocks
- * stream and a crypto stream (Alpaca allows one connection per endpoint per
- * key; the two speak the same wire format), a stocks feed (needs the key)
- * and a crypto feed (public — it answers without one). Stock agents sleep
+ * stream and feed (Alpaca, on the operator's key) and a crypto stream and
+ * feed (Coinbase Exchange's public market data — no key at all, so a crypto
+ * agent has a live tape on a fresh install). Stock agents sleep
  * off-session until the next open (checking once a minute) and the stocks
  * stream is closed, so a night costs nothing — not a print, not a token.
  * Crypto agents never sleep: the market does not close. The `test` feed is
@@ -321,11 +321,12 @@ class RealtimeEngine {
 
   /**
    * Open, retarget or close each class's ONE stream connection from what is
-   * running: the stocks socket while a key is stored and any stock agent
-   * runs in session (or the test feed is chosen), the crypto socket while a
-   * key is stored and any crypto agent runs — at any hour — each subscribed
-   * to the union of its agents' symbols; closed otherwise. Idempotent,
-   * called after every change that could move that answer.
+   * running: the stocks socket (Alpaca) while a key is stored and any stock
+   * agent runs in session (or the test feed is chosen); the crypto socket
+   * (Coinbase, public) while any crypto agent runs — at any hour, key or no
+   * key — each subscribed to the union of its agents' symbols; closed
+   * otherwise. Idempotent, called after every change that could move that
+   * answer.
    */
   private syncStreams(force = false): void {
     const key = alpacaKey.get()
@@ -333,17 +334,9 @@ class RealtimeEngine {
     const now = new Date()
     for (const cls of CLASSES) {
       const symbols = [...new Set(running.filter((s) => s.config.assetClass === cls).flatMap((s) => s.config.symbols))]
-      const want = Boolean(key) && symbols.length > 0 && (cls === 'crypto' || key?.feed === 'test' || isRegularSession(now))
+      const want = symbols.length > 0 && (cls === 'crypto' || (Boolean(key) && (key?.feed === 'test' || isRegularSession(now))))
       if (!want) {
-        const why = !key
-          ? cls === 'crypto'
-            ? 'No stream key — crypto is polled from the public feed every few seconds.'
-            : 'No stream key.'
-          : !symbols.length
-            ? cls === 'crypto'
-              ? 'No crypto agent running.'
-              : 'No running agent.'
-            : 'Market closed — the stream opens at the bell.'
+        const why = !symbols.length ? (cls === 'crypto' ? 'No crypto agent running.' : 'No running agent.') : !key ? 'No stream key.' : 'Market closed — the stream opens at the bell.'
         if (this.streams[cls]) this.closeStream(cls)
         if (this.legs[cls].state !== 'off' || this.legs[cls].detail !== why) this.setLegState(cls, 'off', why)
         continue
@@ -351,24 +344,20 @@ class RealtimeEngine {
       if (!this.streams[cls] || force) {
         this.closeStream(cls)
         this.legs[cls] = { ...this.legs[cls], trades: 0 }
-        this.streams[cls] = alpacaStream({
-          keyId: key!.keyId,
-          secret: key!.secret,
-          feed: cls === 'crypto' ? 'crypto' : key!.feed,
-          log: (level, msg) => log(level, `realtime stream ${cls}`, msg),
-          events: {
-            trade: (symbol, t) => {
-              this.tape(symbol, cls).trade(t)
-              this.legs[cls].trades += 1
-              this.legs[cls].lastMessageAt = new Date().toISOString()
-            },
-            quote: (symbol, q) => {
-              this.tape(symbol, cls).setQuote(q)
-              this.legs[cls].lastMessageAt = new Date().toISOString()
-            },
-            state: (state, detail) => this.setLegState(cls, state, detail)
-          }
-        })
+        const events = {
+          trade: (symbol: string, t: TapeTrade): void => {
+            this.tape(symbol, cls).trade(t)
+            this.legs[cls].trades += 1
+            this.legs[cls].lastMessageAt = new Date().toISOString()
+          },
+          quote: (symbol: string, q: TapeQuote): void => {
+            this.tape(symbol, cls).setQuote(q)
+            this.legs[cls].lastMessageAt = new Date().toISOString()
+          },
+          state: (state: RealtimeStreamLeg['state'], detail?: string): void => this.setLegState(cls, state, detail)
+        }
+        const l = (level: 'info' | 'warn' | 'error', msg: string): void => log(level, `realtime stream ${cls}`, msg)
+        this.streams[cls] = cls === 'crypto' ? coinbaseStream({ events, log: l }) : alpacaStream({ keyId: key!.keyId, secret: key!.secret, feed: key!.feed, log: l, events })
       }
       this.streams[cls]!.subscribe(symbols)
     }
@@ -460,18 +449,15 @@ class RealtimeEngine {
   /**
    * The polled side per class: stocks need the same Alpaca key as the stream
    * (snapshots for symbols the tape has not printed, bars for the
-   * technicals); crypto is public and answers with or without one.
+   * technicals); crypto is Coinbase's public API and needs nothing.
    */
   private priceFeed(cls: AssetClass): PriceFeed | null {
     const k = alpacaKey.get()
     if (cls === 'stocks' && !k) return null
-    const id = k ? `${k.keyId}:${k.feed}` : 'public'
+    const id = cls === 'crypto' ? 'public' : `${k!.keyId}:${k!.feed}`
     if (this.feeds[cls]?.key !== id) {
       const l = (level: 'info' | 'warn' | 'error', msg: string): void => log(level, `feed ${cls}`, msg)
-      this.feeds[cls] = {
-        key: id,
-        feed: cls === 'crypto' ? alpacaCryptoFeed({ keyId: k?.keyId, secretKey: k?.secret, log: l }) : alpacaFeed({ keyId: k!.keyId, secretKey: k!.secret, feed: k!.feed === 'sip' ? 'sip' : 'iex', log: l })
-      }
+      this.feeds[cls] = { key: id, feed: cls === 'crypto' ? coinbaseFeed({ log: l }) : alpacaFeed({ keyId: k!.keyId, secretKey: k!.secret, feed: k!.feed === 'sip' ? 'sip' : 'iex', log: l }) }
     }
     return this.feeds[cls]!.feed
   }

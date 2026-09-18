@@ -19,31 +19,31 @@ npm run dist:win   # installer in dist/
 
 Both are entered in the app's bottom rows and stored encrypted with the OS keychain on this computer. Nothing goes in `.env`.
 
-- **Live data stream** — your own [Alpaca](https://alpaca.markets/) Market Data key. The free plan streams IEX prints and quotes in real time and crypto prints and quotes around the clock (a second socket on the same key); `sip` needs the paid plan; `test` streams a fake symbol (`FAKEPACA`) around the clock so the whole path can be watched with the market closed. The same key serves the polled snapshots and bars.
+- **Live data stream** — your own [Alpaca](https://alpaca.markets/) Market Data key, for stocks. The free plan streams IEX prints and quotes in real time; `sip` needs the paid plan; `test` streams a fake symbol (`FAKEPACA`) around the clock so the whole path can be watched with the market closed. The same key serves the polled snapshots and bars. Crypto needs no key at all (see below).
 - **TypeSafe key** — for Jev. Every check is one request with every symbol's questions in it (fan-out); output tokens are free and input is a few thousand tokens per call.
 
 ## Crypto
 
 An agent is either stocks or crypto (chosen when it is created; one book, one kind of thing in it). Crypto agents watch spot pairs — type `BTC`, `eth`, `SOL/USD` or `BTC-USD`; they come out as `BTC/USD` — and differ from stock agents in exactly the ways the market does:
 
-- **No key needed for prices.** Crypto snapshots and bars come from Alpaca's public crypto endpoints (`data.alpaca.markets/v1beta3/crypto/us-1`, the Kraken-backed location — Alpaca's own venue prints a few dozen BTC trades a day, this one thousands), which answer without an API key, so a crypto agent runs on a fresh install with nothing entered, polled every couple of seconds. Add your free Alpaca key and the same key opens the crypto WebSocket for a real one-second tape (every print, every quote, the taker side). A pair whose book has moved since its last print is marked at the mid, so a thin pair still moves with its market.
+- **No key needed, and a real tape.** Crypto comes from Coinbase Exchange's public market data: the WebSocket feed (`ws-feed.exchange.coinbase.com`) streams every print and the best bid and ask with no authentication, and the REST API serves tickers and 5-minute / daily candles the same way. A crypto agent therefore runs on a fresh install with nothing entered and still sees a one-second tape; the Alpaca key is for stocks only. A pair whose book has moved since its last print is marked at the mid, so a thin pair still moves with its market.
 - **Around the clock.** No open, no close, no flatten time, no entry window. The stop, target, trail and re-entry cooldown apply as for stocks; the day-loss lock still resets on the ET date.
 - **Instant settlement.** Sale proceeds are spendable on the next tick; stocks rehearse T+1 as a cash account would.
 - **Fractional units.** A $2,500 position in BTC is `0.03…` BTC; the paper book carries quantities to six decimals.
 
-Why Alpaca for crypto (researched 2026-09-17): it is the one free source that is keyless for polling, real-time on the free key for streaming, US-accessible, and already the app's only market-data vendor — one wire format, one symbol list per request, one snapshot shape. Coinbase's and Kraken's public sockets are also free but would be a second vendor for the same numbers; Binance is geo-fenced; CoinGecko is minutes-old polled data on a small quota.
+Why Coinbase for crypto (researched and measured 2026-09-17): its public feed needs no key and delivered dozens of BTC-USD prints in ten seconds; its public REST has candles and 400+ USD pairs. Alpaca's crypto data is keyless for polling but its socket needs a key, and Alpaca's own venue is thin (a few dozen BTC prints a day). Kraken's public socket is comparable but Coinbase is the larger US venue. Binance is geo-fenced; CoinGecko is minutes-old polled data on a small quota. Coinbase's MCP server and Advanced Trade API are for accounts and orders; this app only reads public market data and never places an order.
 
 ## Layout
 
 - `src/shared` — pure types and rules (`realtimeAgents.ts` is the contract; `ledger.ts` the paper book; `marketTime.ts` the ET clock)
-- `src/core` — Electron-free engine: `realtime/{situation,policy,tick}.ts` (describe → ask → compose → book), `market/{tape,alpacaStream,alpaca,alpacaCrypto,indicators}.ts`, `broker/paper.ts`
+- `src/core` — Electron-free engine: `realtime/{situation,policy,tick}.ts` (describe → ask → compose → book), `market/{tape,alpacaStream,alpaca,coinbase,indicators}.ts`, `broker/paper.ts`
 - `src/main` — the Electron host: `realtime/RealtimeEngine.ts` (one timer chain per agent, one WebSocket per asset class, the price stream for the page), encrypted key stores, IPC
 - `src/renderer` — the dashboard: `RealtimeChart` (the hero), `DecisionPanel`, `Feed`
 - `scripts` — the checks
 
 ## Not advice, and paper only
 
-This is a paper-trading experiment: it simulates fills at real quotes and never places an order anywhere — no exchange, no wallet, no broker. Nothing it does or says is investment advice. Market data comes from Alpaca (your own key, or its public crypto endpoints) under Alpaca's terms; model answers come from your own TypeSafe key under TypeSafe's.
+This is a paper-trading experiment: it simulates fills at real quotes and never places an order anywhere — no exchange, no wallet, no broker. Nothing it does or says is investment advice. Stock data comes from your own Alpaca key under Alpaca's terms; crypto data from Coinbase Exchange's public market data under Coinbase's; model answers come from your own TypeSafe key under TypeSafe's.
 
 ## License
 

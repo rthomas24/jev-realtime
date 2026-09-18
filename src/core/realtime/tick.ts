@@ -314,8 +314,13 @@ export function readVerdicts(answers: Record<string, unknown>, asked: Asked): Re
     const intact = noul(q.intact)
     if (intact !== undefined) v.trendIntact = intact
     if (q.setup) {
-      const s = answers[q.setup] as { type?: string; score?: number } | undefined
-      if (s && s.type === 'score' && typeof s.score === 'number') v.setup = r2(s.score)
+      const s = answers[q.setup] as { type?: string; score?: number; confidence?: number; probabilities?: Record<string, number> } | undefined
+      if (s && s.type === 'score' && typeof s.score === 'number') {
+        v.setup = r2(s.score)
+        if (typeof s.confidence === 'number') v.setupConfidence = r2(s.confidence)
+        const pr = s.probabilities
+        if (pr && ['0', '1', '2'].every((k) => typeof pr[k] === 'number')) v.setupProbabilities = [r2(pr['0']), r2(pr['1']), r2(pr['2'])]
+      }
     }
     out[symbol] = v
   }

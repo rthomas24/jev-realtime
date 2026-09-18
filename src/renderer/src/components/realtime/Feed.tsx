@@ -2,7 +2,7 @@ import type { JSX } from 'react'
 import { useMemo } from 'react'
 import { money } from '@shared/ledger'
 import { REALTIME_RULE_LABEL, type RealtimeDecision, type RealtimeTick } from '@shared/realtimeAgents'
-import { cn, clockTime, signedMoney } from '@renderer/lib/format'
+import { cn, clockTime, compactNumber, signedMoney } from '@renderer/lib/format'
 
 type Kind = 'buy' | 'sell' | 'hold' | 'blocked' | 'quiet' | 'error'
 
@@ -68,7 +68,8 @@ export function Feed({ ticks, symbol }: { ticks: RealtimeTick[]; symbol: string 
                 </>
               )
             } else if (kind === 'hold') {
-              detail = d.price !== null ? `@ ${money(d.price)}` : ''
+              // The price it judged at, and what the answer cost in tokens.
+              detail = `${d.price !== null ? `@ ${money(d.price)}` : ''}${tick.usage ? ` · ${compactNumber(tick.usage.input)} tok` : ''}`
               muted = true
             } else {
               detail = REALTIME_RULE_LABEL[d.rule].toLowerCase()

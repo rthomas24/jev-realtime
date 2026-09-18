@@ -195,6 +195,9 @@ export interface RealtimeVerdict {
   extended?: number
   /** Setup quality, 0 chop … 2 clean, probability-weighted. Flat only. */
   setup?: number
+  /** The setup answer's spread over its three levels (chop, mixed, clean), and how peaked it was. Flat only. */
+  setupProbabilities?: [number, number, number]
+  setupConfidence?: number
   /** P(a sharp reversal against the open position). Holding only. */
   reversal?: number
   /** P(the move that justified the entry is still intact). Holding only. */

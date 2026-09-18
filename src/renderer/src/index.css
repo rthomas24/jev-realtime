@@ -1605,9 +1605,32 @@
 .rt-bar { transition: width 0.25s linear, background 0.25s; }
 .rt-row-new { animation: rt-row-in 0.25s ease-out both; }
 @keyframes rt-row-in { from { transform: translateY(-6px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* The model panel (`DecisionPanel.tsx`): gauges that ease to their value, a
+   sheen that sweeps the answer the model picked on a fresh check, a pin and a
+   threshold tick that glide, a ring for confidence, chips that rise in one
+   after another, and a card flash when a new answer lands. */
+.rt-gauge { position: relative; transition: width 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s; }
+.rt-gauge-live::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, color-mix(in oklab, white 55%, transparent) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: rt-sweep 1.4s ease-out 0.2s 1;
+}
+@keyframes rt-sweep { to { transform: translateX(100%); } }
+.rt-pin { transition: left 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s; }
+.rt-ring { transition: stroke-dashoffset 0.55s cubic-bezier(0.2, 0.8, 0.2, 1), stroke 0.3s; }
+.rt-live-dot { animation: rt-live 1.6s ease-in-out infinite; }
+@keyframes rt-live { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
+.rt-chip { animation: rt-chip-in 0.32s ease-out both; }
+@keyframes rt-chip-in { from { opacity: 0; transform: translateY(5px) scale(0.96); } to { opacity: 1; transform: none; } }
+.rt-flash { animation: rt-flash 0.9s ease-out; }
+@keyframes rt-flash { from { box-shadow: inset 0 0 0 1px var(--ring), inset 0 0 24px var(--ring-soft); } to { box-shadow: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .rt-slide, .rt-tag, .rt-bar { transition: none; }
-  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new { animation: none; }
+  .rt-slide, .rt-tag, .rt-bar, .rt-gauge, .rt-pin, .rt-ring { transition: none; }
+  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new, .rt-gauge-live::after, .rt-live-dot, .rt-chip, .rt-flash { animation: none; }
   .rt-halo, .rt-ripple, .rt-riser, .rt-cell-glow { opacity: 0; }
 }
 

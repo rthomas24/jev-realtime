@@ -94,7 +94,8 @@ export function compactNumber(n: number): string {
 export function usd(n: number): string {
   if (!Number.isFinite(n)) return '—'
   if (n === 0) return '$0'
-  if (n < 0.01) return `$${n.toFixed(4)}`
+  // One call is a few millionths of a dollar: two significant figures, never an exponent.
+  if (n < 0.01) return `$${Number(n.toPrecision(2)).toFixed(Math.max(2, -Math.floor(Math.log10(n)) + 1))}`
   if (n < 1) return `$${n.toFixed(3)}`
   return `$${n.toFixed(2)}`
 }

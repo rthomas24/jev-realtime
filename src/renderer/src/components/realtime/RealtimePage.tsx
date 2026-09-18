@@ -35,7 +35,7 @@ import {
 } from '@shared/realtimeAgents'
 import { RealtimeChart } from './RealtimeChart'
 import { TickerPicker, type Picked } from './TickerPicker'
-import { DecisionPanel } from './DecisionPanel'
+import { DecisionPanel, type DecisionAt } from './DecisionPanel'
 import { Feed } from './Feed'
 
 /**
@@ -675,12 +675,18 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   const avgLat = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null
   const fillsToday = state.ledger.fills.filter((f) => f.ts.slice(0, 10) === (state.dayDate ?? '')).length
   const firstToday = ticks.find((t) => t.at.slice(0, 10) === state.dayDate)?.at ?? null
-  const latest = useMemo(() => {
-    for (let i = ticks.length - 1; i >= 0; i--) {
+  // The newest decision for this symbol, and the newest one the model
+  // actually answered — on a quiet tick they differ, and the panel says so.
+  const { latest, judged } = useMemo(() => {
+    let latest: DecisionAt | null = null
+    let judged: DecisionAt | null = null
+    for (let i = ticks.length - 1; i >= 0 && !(latest && judged); i--) {
       const d = ticks[i].decisions.find((x) => x.symbol === symbol)
-      if (d) return d
+      if (!d) continue
+      latest ??= { tick: ticks[i], d }
+      if (d.verdict) judged ??= { tick: ticks[i], d }
     }
-    return null
+    return { latest, judged }
   }, [ticks, symbol])
   const position = state.ledger.positions.find((p) => p.symbol === symbol) ?? null
   const exit = state.exits[symbol] ?? null
@@ -785,7 +791,7 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
         <Splitter width={detail.width} onResize={detail.set} onReset={detail.reset} grows="right" label="Verdict panel width" />
         <div className="shrink-0 min-h-0 flex flex-col card overflow-hidden" style={{ width: detail.width }}>
           <div className="shrink-0">
-            <DecisionPanel config={config} symbol={symbol} latest={latest} state={state} />
+            <DecisionPanel config={config} symbol={symbol} latest={latest} judged={judged} state={state} />
           </div>
           <div className="flex-1 min-h-0 flex flex-col">
             <Feed ticks={ticks} symbol={symbol} />

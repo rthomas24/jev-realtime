@@ -1,0 +1,1612 @@
+@import 'tailwindcss';
+/* Bundled, not fetched: the renderer's CSP forbids remote stylesheets and font
+   files, so the two families ship in the app. Variable weights (100–900) mean
+   one file per family covers every weight the UI uses. */
+@import '@fontsource-variable/inter/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * HARBOUR — the HarborBots design system.
+ *
+ * The product is a fleet of colleagues who each keep a book. The interface
+ * should read like correspondence with them, and like a statement of what
+ * they did with the money. Six rules carry the whole system:
+ *
+ *   1. ELEVATION HAS TWO REGIMES AND THEY NEVER MIX. On the page, depth is a
+ *      tinted surface ladder plus a hairline (`.card`, `.panel`). Above the
+ *      page — menu, popover, sheet, dialog — depth is a stacked shadow plus
+ *      an inset ring (`.card-float`). A card never needs a shadow to exist;
+ *      a popover never relies on a border alone.
+ *
+ *   2. COLOUR IS RATIONED TO MEANING. The chrome is achromatic. The accent
+ *      means "the action here". Green and red mean money, and nothing else —
+ *      a colour spent on decoration is a colour that can no longer tell the
+ *      truth, which on a trading surface is a safety property. Brass marks
+ *      real money; red outside a loss figure means only "armed" or "halted".
+ *
+ *   3. HIERARCHY IS WEIGHT AND TONE, NOT SIZE. 400 body · 500 labels, buttons
+ *      and selected rows · 600 headings. Emphasise by muting the neighbours.
+ *
+ *   4. NUMBERS ARE FIRST-CLASS TYPOGRAPHY. Every numeral is tabular, every
+ *      P&L carries a sign, money is right-aligned, and figures never change
+ *      width as they change value.
+ *
+ *   5. EVERYTHING IS DERIVED FROM 18 SEED TOKENS. `shared/themes.ts` gives a
+ *      palette 18 colours; every surface, hairline, tint and state in this
+ *      file is `color-mix`ed from those, so all 17 catalogue themes get the
+ *      same elevation steps, the same hairline visibility and the same
+ *      contrast without being hand-tuned.
+ *
+ *   6. MOTION IS FAST, EASE-OUT, TRANSFORM/OPACITY ONLY, AND INTERRUPTIBLE.
+ *      Under 200 ms for anything immediate, 300 ms ceiling for surfaces, and
+ *      absent entirely from high-frequency actions. Delight scales inversely
+ *      with frequency: a fill animates, a sidebar row does not.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+@theme static {
+  /* ── Seeds (overwritten per palette by renderer/lib/theme.ts) ─────────── */
+  --color-bg: #fbfcfd;
+  --color-rail: #f4f6f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f4f7;
+  --color-surface-3: #e5e9ee;
+  --color-border: #dfe4ea;
+  --color-muted: #66707c;
+  --color-text: #11161d;
+  --color-accent: #1f6feb;
+  --color-accent-fg: #ffffff;
+  --color-bubble: #e8ecf1;
+  --color-bubble-fg: #11161d;
+  --color-up: #0f8a5f;
+  --color-down: #d0342c;
+  --color-warn: #b45309;
+  --color-btn: #11161d;
+  --color-btn-fg: #ffffff;
+  --color-local: #0e7490;
+
+  /* ── Identity ─────────────────────────────────────────────────────────
+     Mode is what the money is: paper is graphite, live is brass. Red is not
+     spent on "live" — it is kept for a loss, for ARMED, and for the halt, so
+     that when red appears it always means the same thing. */
+  --color-live: #a16207;
+  --color-paper: #526070;
+  --color-cloud: #4f46e5;
+  --color-armed: #d0342c;
+
+  /* ── Derived surfaces, lines and text ─────────────────────────────────
+     Indirected through non-theme variables ON PURPOSE: Tailwind inlines
+     theme-to-theme var() references at build time, which would freeze these
+     to the default palette and make them vanish on every other theme. */
+  --color-hairline: var(--line);
+  --color-hairline-strong: var(--line-strong);
+  --color-line-faint: var(--line-faint);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+
+  /* ── Type ─────────────────────────────────────────────────────────────
+     One sans, one mono. Thirteen ad-hoc sizes collapse to eight named steps. */
+  /* Emoji families sit BEFORE the generic `sans-serif`: a generic family ends
+     the fallback chain, and agent avatars are emoji that Inter does not carry —
+     with the generic first they rendered as blank tiles. */
+  --font-sans: 'Inter Variable', -apple-system, 'Segoe UI', system-ui, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'SF Mono', ui-monospace, 'Apple Color Emoji', 'Segoe UI Emoji', monospace;
+  --text-2xs: 10.5px;
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-base: 13px;
+  --text-md: 13.75px;
+  --text-lg: 15px;
+  --text-xl: 17px;
+  --text-2xl: 22px;
+
+  /* ── Radii — inner radius = outer − padding ───────────────────────────── */
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-xl: 15px;
+
+  /* ── Motion ───────────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 280ms;
+
+  /* ── Chrome metrics ───────────────────────────────────────────────────── */
+  --h-header: 48px;
+  --h-status: 28px;
+  --h-row: 34px;
+  --w-thread: 760px;
+}
+
+:root {
+  /* Hairlines are mixed from the TEXT colour, so they hold their weight on a
+     white card and on a near-black one alike. */
+  --line-faint: color-mix(in oklab, var(--color-text) 5%, transparent);
+  --line: color-mix(in oklab, var(--color-text) 9%, transparent);
+  --line-strong: color-mix(in oklab, var(--color-text) 15%, transparent);
+  --text-2: var(--color-muted);
+  --text-3: color-mix(in oklab, var(--color-muted) 72%, transparent);
+
+  /* Tints: the 10–14 % wash behind a semantic pill or a state row. One recipe
+     per meaning, so nothing is hand-mixed at the call site. */
+  --tint-accent: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  --tint-up: color-mix(in oklab, var(--color-up) 13%, transparent);
+  --tint-down: color-mix(in oklab, var(--color-down) 13%, transparent);
+  --tint-warn: color-mix(in oklab, var(--color-warn) 14%, transparent);
+  --tint-live: color-mix(in oklab, var(--color-live) 15%, transparent);
+  --tint-paper: color-mix(in oklab, var(--color-paper) 13%, transparent);
+  --tint-local: color-mix(in oklab, var(--color-local) 13%, transparent);
+  --tint-cloud: color-mix(in oklab, var(--color-cloud) 13%, transparent);
+  --tint-armed: color-mix(in oklab, var(--color-armed) 13%, transparent);
+
+  /* Elevation. L1 lives on the page; L2/L3 float above it. */
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-2: 0 0 0 1px var(--line), 0 2px 6px rgb(0 0 0 / 0.06);
+  --shadow-float: 0 0 0 1px var(--line-strong), 0 4px 12px rgb(0 0 0 / 0.08), 0 20px 48px -16px rgb(0 0 0 / 0.18);
+  --shadow-sheet: -12px 0 48px -16px rgb(0 0 0 / 0.24);
+  --ring: color-mix(in oklab, var(--color-accent) 45%, transparent);
+  --ring-soft: color-mix(in oklab, var(--color-accent) 16%, transparent);
+  --sel: color-mix(in oklab, var(--color-text) 6%, transparent);
+  --scrim: rgb(0 0 0 / 0.3);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  /* The flagship dark palette. Catalogue themes overwrite these inline. */
+  --color-bg: #0e1116;
+  --color-rail: #12161c;
+  --color-surface: #171b22;
+  --color-surface-2: #1d222a;
+  --color-surface-3: #262c36;
+  --color-border: #262c36;
+  --color-muted: #8d97a5;
+  --color-text: #e8ecf2;
+  --color-accent: #4d8dfd;
+  --color-bubble: #232935;
+  --color-bubble-fg: #e8ecf2;
+  --color-btn: #e8ecf2;
+  --color-btn-fg: #11161d;
+  --color-local: #22d3ee;
+  --color-live: #d9a441;
+  --color-paper: #8894a4;
+  --color-cloud: #8b87ff;
+  --color-armed: #f0554f;
+  --color-up: #26b579;
+  --color-down: #f0554f;
+  --color-warn: #e0912b;
+
+  /* Dark surfaces separate by less, so every line is mixed stronger. */
+  --line-faint: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --line: color-mix(in oklab, var(--color-text) 13%, transparent);
+  --line-strong: color-mix(in oklab, var(--color-text) 21%, transparent);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-2: 0 0 0 1px var(--line), 0 2px 6px rgb(0 0 0 / 0.35);
+  --shadow-float: 0 0 0 1px var(--line-strong), 0 4px 12px rgb(0 0 0 / 0.4), 0 20px 48px -16px rgb(0 0 0 / 0.65);
+  --shadow-sheet: -12px 0 48px -16px rgb(0 0 0 / 0.6);
+  --sel: color-mix(in oklab, var(--color-text) 9%, transparent);
+  --scrim: rgb(0 0 0 / 0.55);
+  color-scheme: dark;
+}
+
+/* Calm mode: the operator wants to look at the fleet without the numbers
+   shouting. P&L colour drains to the text colour — but nothing that carries a
+   SAFETY meaning is touched, so armed pennants, halts and pending approvals
+   stay exactly as loud as they were.
+
+   `!important` is load-bearing, not decoration. `renderer/lib/theme.ts` applies
+   the catalogue palette by writing every `ThemeTokens` entry as an INLINE
+   custom property on <html> — `up` and `down` among them — and an inline
+   declaration outranks a stylesheet rule at the same specificity. Without the
+   flag this block lost the colour half of its own job while the two tint lines
+   (which nothing writes inline) still applied: the toggle left every P&L figure
+   fully coloured and instead stripped the wash off the danger surfaces. That is
+   the exact inverse of the rule, so the drain is forced here.
+
+   The safety colours are safe by construction rather than by care: `--color-armed`
+   is stylesheet-only (it is not a `ThemeTokens` key, so nothing writes it inline)
+   and `--color-warn`, which IS a theme token and so IS written inline, is simply
+   not named in this block. Neither can be quietened by calm mode, whichever way
+   the cascade falls — which is why every danger and warning surface below is
+   drawn from those two and never from `--color-down`. */
+:root[data-calm='1'] {
+  --color-up: var(--color-muted) !important;
+  --color-down: var(--color-muted) !important;
+  --tint-up: transparent;
+  --tint-down: transparent;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    font-feature-settings: 'cv05' 1, 'cv08' 1, 'ss03' 1;
+    letter-spacing: -0.003em;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 26%, transparent);
+  }
+  /* Every numeral in the app is tabular by default: a figure must not change
+     width as it changes value, or a column of money jitters while it updates. */
+  .nums,
+  input[type='number'],
+  table,
+  time {
+    font-variant-numeric: tabular-nums;
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+    letter-spacing: -0.01em;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-text) 14%, transparent);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-text) 26%, transparent);
+    background-clip: content-box;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+  }
+  button {
+    cursor: default;
+  }
+  .drag {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* ═══ Surfaces ══════════════════════════════════════════════════════════
+     Rule 1. `.panel` is structural chrome (sidebar, status bar, headers) and
+     is separated by a hairline, never a shadow. `.card` sits ON the page.
+     `.card-float` sits ABOVE it. */
+  .panel {
+    background: var(--color-rail);
+  }
+  .card {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 0 0 1px var(--color-hairline);
+  }
+  /* There is no `.card-raised`. Rule 1 says a card on the page is a tinted
+     surface plus a hairline and never needs a shadow to exist; a shadowed card
+     is the floating regime, which is `.card-float`. Nothing in the renderer
+     used it, and a third option sitting between the two regimes is how they
+     start to mix. */
+  /* A card that recedes: for context the eye should skip unless it looks. */
+  .card-quiet {
+    background: color-mix(in oklab, var(--color-surface-2) 60%, var(--color-surface));
+    border-radius: var(--radius-lg);
+    box-shadow: 0 0 0 1px var(--color-line-faint);
+  }
+  .card-float {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-float);
+  }
+  .inset {
+    background: var(--color-surface-2);
+    border-radius: var(--radius-md);
+  }
+  .hair-t {
+    box-shadow: inset 0 1px 0 var(--color-hairline);
+  }
+  .hair-b {
+    box-shadow: inset 0 -1px 0 var(--color-hairline);
+  }
+  .hair-r {
+    box-shadow: inset -1px 0 0 var(--color-hairline);
+  }
+  .hair-l {
+    box-shadow: inset 1px 0 0 var(--color-hairline);
+  }
+  .divide-hair > * + * {
+    border-top: 1px solid var(--color-hairline);
+  }
+
+  /* ═══ Buttons ═══════════════════════════════════════════════════════════
+     One filled action per surface (rule 2). Everything else is ghost or
+     outline. Press gives back 3 % — the only motion a button makes. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 select-none whitespace-nowrap;
+    height: 30px;
+    padding: 0 11px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-base);
+    font-weight: 500;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+  .btn:active {
+    transform: scale(0.97);
+  }
+  .btn-sm {
+    height: 26px;
+    padding: 0 9px;
+    font-size: var(--text-sm);
+    border-radius: var(--radius-xs);
+  }
+  .btn-lg {
+    height: 36px;
+    padding: 0 15px;
+    border-radius: var(--radius-md);
+  }
+  .btn-primary {
+    background: var(--color-btn);
+    color: var(--color-btn-fg);
+  }
+  .btn-primary:hover {
+    background: color-mix(in oklab, var(--color-btn) 86%, var(--color-bg));
+  }
+  .btn-accent {
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+  }
+  .btn-accent:hover {
+    background: color-mix(in oklab, var(--color-accent) 88%, var(--color-text));
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-text);
+  }
+  .btn-ghost:hover {
+    background: var(--sel);
+  }
+  .btn-outline {
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: 0 0 0 1px var(--color-hairline-strong);
+  }
+  .btn-outline:hover {
+    background: var(--color-surface-2);
+  }
+  /* A destructive control is a SAFETY signal, not a loss figure, so it is drawn
+     from `--color-armed` like its solid sibling below — which also means calm
+     mode cannot quieten it. On `--color-down` it was draining to muted grey the
+     moment the operator turned the numbers down: "Delete", "Disarm" and
+     "Retire" losing their warning at exactly the wrong moment. */
+  .btn-danger {
+    background: var(--tint-armed);
+    color: var(--color-armed);
+  }
+  .btn-danger:hover {
+    background: color-mix(in oklab, var(--color-armed) 20%, transparent);
+  }
+  /* The one solid red control in the app: disarming, halting, deleting. */
+  .btn-danger-solid {
+    background: var(--color-armed);
+    color: #fff;
+  }
+  .btn-danger-solid:hover {
+    background: color-mix(in oklab, var(--color-armed) 88%, #000);
+  }
+  .btn-icon {
+    @apply inline-flex items-center justify-center shrink-0;
+    height: 28px;
+    width: 28px;
+    border-radius: var(--radius-sm);
+    color: var(--color-muted);
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out);
+  }
+  .btn-icon:hover {
+    background: var(--sel);
+    color: var(--color-text);
+  }
+  .btn-icon:active {
+    transform: scale(0.93);
+  }
+  .btn-icon:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+  .btn-icon[data-on='true'] {
+    background: var(--tint-accent);
+    color: var(--color-accent);
+  }
+
+  /* ═══ Fields ════════════════════════════════════════════════════════════ */
+  .input,
+  .textarea,
+  .select {
+    @apply w-full outline-none;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: var(--text-base);
+    box-shadow: 0 0 0 1px var(--color-hairline-strong);
+    transition:
+      box-shadow var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out);
+  }
+  .input::placeholder,
+  .textarea::placeholder {
+    color: var(--color-text-3);
+  }
+  .input:hover,
+  .textarea:hover,
+  .select:hover {
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-text) 24%, transparent);
+  }
+  .input:focus,
+  .textarea:focus,
+  .select:focus {
+    box-shadow:
+      0 0 0 1px var(--color-accent),
+      0 0 0 3.5px var(--ring-soft);
+  }
+  .input:focus-visible,
+  .textarea:focus-visible,
+  .select:focus-visible {
+    outline: none;
+  }
+  /* A refused field is a refusal, not a loss: armed-red, so calm mode leaves it
+     at full strength. (Before the calm block actually worked, `--color-down`
+     here was harmless; now that the drain bites, a rejected allocation would
+     have gone grey the moment the operator turned the numbers down.) */
+  .input-invalid,
+  .input-invalid:focus {
+    box-shadow:
+      0 0 0 1px var(--color-armed),
+      0 0 0 3.5px color-mix(in oklab, var(--color-armed) 16%, transparent);
+  }
+  .select {
+    appearance: none;
+    padding-right: 26px;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+      calc(100% - 14px) calc(50% + 1px),
+      calc(100% - 9px) calc(50% + 1px);
+    background-size:
+      5px 5px,
+      5px 5px;
+    background-repeat: no-repeat;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--color-accent);
+  }
+  /* A label is a word, not a shout: sentence case, text colour, medium. */
+  .label {
+    @apply block;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    margin-bottom: 5px;
+    color: var(--color-text);
+  }
+  .hint {
+    font-size: var(--text-xs);
+    color: var(--color-muted);
+    line-height: 1.5;
+  }
+  /* Small-caps section eyebrow — used sparingly, as a column head, never as
+     the app's main hierarchy tool. */
+  .eyebrow {
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+  }
+
+  /* ═══ Segmented control ═════════════════════════════════════════════════ */
+  .seg {
+    @apply inline-flex items-center;
+    background: var(--color-surface-2);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    gap: 2px;
+  }
+  .seg-item {
+    @apply inline-flex items-center justify-center gap-1.5 flex-1 whitespace-nowrap;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--color-muted);
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .seg-item:hover {
+    color: var(--color-text);
+  }
+  .seg-item[data-on='true'] {
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: var(--shadow-1), 0 0 0 1px var(--color-line-faint);
+  }
+
+  /* ═══ Pills, chips and the ticker ═══════════════════════════════════════
+     `.ticker` is the atomic unit of the whole interface: the same chip in the
+     sidebar preview, a tool row, a trade card and the portfolio panel. */
+  .pill {
+    @apply inline-flex items-center gap-1 whitespace-nowrap;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    background: var(--color-surface-2);
+    color: var(--color-muted);
+  }
+  .pill-live {
+    background: var(--tint-live);
+    color: var(--color-live);
+  }
+  .pill-armed {
+    background: var(--tint-armed);
+    color: var(--color-armed);
+  }
+  .pill-paper {
+    background: var(--tint-paper);
+    color: var(--color-paper);
+  }
+  /* No `.pill-cloud`: the provider badge in the sidebar row and the thread
+     header is deliberately an achromatic `.pill` — Cloud is where an agent
+     runs, not what its money is, and mode (live brass / paper graphite) is the
+     colour that badge column carries. `--color-cloud` and `--tint-cloud` are
+     still live; ProviderPicker paints the Cloud option's mark with them. */
+  .pill-accent {
+    background: var(--tint-accent);
+    color: var(--color-accent);
+  }
+  .pill-warn {
+    background: var(--tint-warn);
+    color: var(--color-warn);
+  }
+  .pill-up {
+    background: var(--tint-up);
+    color: var(--color-up);
+  }
+  .pill-down {
+    background: var(--tint-down);
+    color: var(--color-down);
+  }
+  .pill-local {
+    position: relative;
+    overflow: hidden;
+    background: var(--tint-local);
+    color: var(--color-local);
+  }
+  /* A local model is thinking on this machine's own GPU: the one ambient
+     animation in the chrome, and it only runs while that is true. */
+  .pill-local.working::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 20%, color-mix(in oklab, var(--color-local) 38%, transparent) 50%, transparent 80%);
+    transform: translateX(-100%);
+    animation: sheen 1.8s ease-in-out infinite;
+  }
+  @keyframes sheen {
+    0% {
+      transform: translateX(-100%);
+    }
+    60%,
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  .local-glow {
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--color-local) 45%, transparent),
+      0 0 18px color-mix(in oklab, var(--color-local) 35%, transparent);
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-2);
+    font-size: var(--text-xs);
+    color: var(--color-text);
+  }
+  .chip-btn:hover {
+    background: var(--color-surface-3);
+  }
+  .ticker {
+    @apply inline-flex items-baseline gap-1.5 whitespace-nowrap;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-2);
+    box-shadow: inset 0 0 0 1px var(--color-line-faint);
+  }
+  .ticker-sym {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .ticker-px {
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+  }
+
+  /* ═══ Money ═════════════════════════════════════════════════════════════
+     Rule 4. `.money` is the register every figure is set in; `.hero-num` is
+     the one headline figure a surface is allowed. */
+  .money {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .money-up {
+    color: var(--color-up);
+  }
+  .money-down {
+    color: var(--color-down);
+  }
+  .hero-num {
+    font-size: var(--text-2xl);
+    font-weight: 550;
+    letter-spacing: -0.022em;
+    line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+  }
+  /* A statement line: label on the left, dotted leader, figure on the right.
+     Used by trade receipts, the ledger strip and the stats statement. */
+  .leader {
+    @apply flex items-baseline gap-2;
+  }
+  .leader::before {
+    content: '';
+    order: 1;
+    flex: 1;
+    height: 0;
+    margin-bottom: 3px;
+    border-bottom: 1px dotted var(--color-hairline-strong);
+  }
+  .leader > :first-child {
+    order: 0;
+    color: var(--color-muted);
+  }
+  .leader > :last-child {
+    order: 2;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ═══ Stat tiles ════════════════════════════════════════════════════════ */
+  .stat {
+    @apply flex flex-col gap-1;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+    /* A grid child defaults to min-width:auto, i.e. as wide as its widest
+       figure — so a tile too narrow for its number grew past its cell and
+       over the tile beside it. Floor it at the cell: the figure may be
+       tight, but it stays inside its own tile. */
+    min-width: 0;
+    overflow: hidden;
+  }
+  .stat-label {
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+  }
+  .stat-value {
+    font-size: var(--text-xl);
+    font-weight: 550;
+    letter-spacing: -0.018em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .stat-sub {
+    font-size: var(--text-xs);
+    color: var(--color-muted);
+  }
+
+  /* ═══ Meters ════════════════════════════════════════════════════════════ */
+  .meter {
+    height: 5px;
+    border-radius: 3px;
+    background: var(--color-surface-3);
+    overflow: hidden;
+  }
+  .meter > span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--color-accent);
+    transition: width var(--dur-slow) var(--ease-out);
+  }
+  /* A meter reporting a real figure has to LOOK like one. At 2 % of a 56px bar
+     the fill is a sliver under a pixel, which reads as "none of it used" — a
+     quota bar that says zero while the quota is running is the meter lying.
+     The floor is keyed on `aria-valuenow`, which every meter already publishes,
+     so a genuine zero still draws empty and nothing is invented. */
+  .meter:not([aria-valuenow='0']) > span {
+    min-width: 3%;
+  }
+  /* A meter that reports rather than urges — fleet capacity, a quota with
+     plenty left. It still turns warn/over, because those are the states worth
+     the accent. */
+  .meter[data-tone='quiet'] > span {
+    background: color-mix(in oklab, var(--color-text) 34%, transparent);
+  }
+  .meter[data-level='warn'] > span {
+    background: var(--color-warn);
+  }
+  .meter[data-level='over'] > span {
+    background: var(--color-down);
+  }
+  /* The same meter, worn in the chrome. A quota that has run out is a warning,
+     not a loss and not an armed agent, and the status strip is allowed exactly
+     ONE red — the account halt. So the top step here is `--color-warn`; the bar
+     still escalates accent → warn, and the figure beside it takes the weight. */
+  .meter-chrome[data-level='over'] > span {
+    background: var(--color-warn);
+  }
+  /* Money that exists but cannot be spent yet (T+1) is hatched, never solid. */
+  .hatched {
+    background-image: repeating-linear-gradient(45deg, transparent, transparent 3px, color-mix(in oklab, var(--color-text) 12%, transparent) 3px, color-mix(in oklab, var(--color-text) 12%, transparent) 6px);
+  }
+
+  /* ═══ Rows (sidebar, lists, menus) ══════════════════════════════════════ */
+  .row {
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      opacity var(--dur-fast) var(--ease-out);
+  }
+  .row:hover {
+    background: var(--sel);
+  }
+  .row[data-on='true'] {
+    background: color-mix(in oklab, var(--color-text) 8%, transparent);
+  }
+  .menu-item {
+    @apply flex w-full items-center gap-2 text-left;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-base);
+    color: var(--color-text);
+  }
+  .menu-item:hover {
+    background: var(--sel);
+  }
+  /* Same rule as `.btn-danger`: the destructive row in a menu is armed-red, not
+     loss-red, so calm mode never takes the warning off it. */
+  .menu-item[data-danger='true'] {
+    color: var(--color-armed);
+  }
+  .menu-item[data-danger='true']:hover {
+    background: var(--tint-armed);
+  }
+  .menu-sep {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--color-hairline);
+  }
+  .kbd {
+    @apply inline-flex items-center justify-center;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--color-surface-2);
+    box-shadow: inset 0 0 0 1px var(--color-line-faint);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--color-muted);
+  }
+
+  /* ═══ The thread ════════════════════════════════════════════════════════
+     Only the operator gets a bubble. An agent's turn is a MEMO — a ruled
+     header, prose, and (when it moved money) a book line — so the thread
+     reads as correspondence with a colleague who reports, not as a chat. */
+  .bubble-user {
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+    border-radius: 16px 16px 5px 16px;
+    box-shadow: var(--shadow-1);
+  }
+  .bubble-user.bubble-queued {
+    background: color-mix(in oklab, var(--color-accent) 13%, var(--color-surface));
+    color: var(--color-text);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 42%, transparent);
+  }
+  /* A message that did not reach the agent. Armed-red for the same reason as
+     `.input-invalid`: it is a failure the operator has to act on (Try again /
+     Discard), so calm mode must not be able to quieten it. */
+  .bubble-user.bubble-failed {
+    background: color-mix(in oklab, var(--color-armed) 11%, var(--color-surface));
+    color: var(--color-text);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-armed) 48%, transparent);
+  }
+  .memo {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 0 0 1px var(--color-hairline);
+    overflow: hidden;
+  }
+  .memo-head {
+    @apply flex items-center gap-2;
+    height: 30px;
+    padding: 0 12px;
+    font-size: var(--text-xs);
+    color: var(--color-muted);
+    box-shadow: inset 0 -1px 0 var(--color-line-faint);
+  }
+  .memo-body {
+    padding: 10px 12px 11px;
+    font-size: var(--text-md);
+    line-height: 1.58;
+  }
+  /* The book line: a bank-statement footer under a turn that moved money. */
+  .book-line {
+    @apply flex flex-wrap items-center gap-x-3 gap-y-1;
+    padding: 7px 12px;
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+    background: color-mix(in oklab, var(--color-surface-2) 55%, transparent);
+    box-shadow: inset 0 1px 0 var(--color-line-faint);
+  }
+  .msg-card {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 0 0 1px var(--color-hairline);
+    overflow: hidden;
+  }
+  /* A card that needs an answer keeps a 2px accent edge until it gets one. */
+  .msg-card[data-pending='true'] {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-accent) 34%, transparent),
+      var(--shadow-2);
+  }
+  /* Enter: only messages that ARRIVE animate (ThreadView marks them `fresh`);
+     history paints in place, and a transition rather than keyframes means a
+     message reflowed mid-enter simply continues from where it is. */
+  .msg-enter {
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+      opacity var(--dur) var(--ease-out),
+      transform var(--dur-slow) var(--ease-out);
+    @starting-style {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+  .msg-row .msg-time {
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .msg-row:hover .msg-time,
+  .msg-row:focus-within .msg-time {
+    opacity: 1;
+  }
+  .day-rule {
+    @apply flex items-center gap-3;
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--color-text-3);
+  }
+  .day-rule::before,
+  .day-rule::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--color-hairline);
+  }
+  /* Everything one run produced hangs off one rail, so the eye reads "this run
+     did these things" instead of a column of unrelated cards. */
+  .run-group {
+    position: relative;
+    padding-left: 15px;
+  }
+  .run-group::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 20px;
+    bottom: 4px;
+    width: 1.5px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, var(--color-hairline-strong), var(--color-line-faint));
+  }
+  .run-head {
+    @apply flex items-center gap-1.5;
+    height: 22px;
+    margin-left: -15px;
+    font-size: var(--text-xs);
+    color: var(--color-text-3);
+  }
+  .run-dot {
+    @apply inline-flex shrink-0 items-center justify-center;
+    height: 13px;
+    width: 13px;
+    margin-right: 4px;
+    border-radius: 9999px;
+    background: var(--color-bg);
+    box-shadow: 0 0 0 1.5px var(--color-hairline-strong);
+    color: var(--color-muted);
+  }
+  /* The heartbeat's marks are buttons: a hover lifts and tints the mark, a
+     click scrolls the thread to that run, which then flashes once so the eye
+     lands on the right block after the scroll. */
+  .hb-mark {
+    cursor: pointer;
+    outline: none;
+  }
+  .hb-mark .hb-hit {
+    transition: fill var(--dur-fast) var(--ease-out);
+  }
+  .hb-mark:hover .hb-hit,
+  .hb-mark:focus-visible .hb-hit {
+    fill: var(--tint-accent);
+  }
+  .hb-mark:hover rect:not(.hb-hit),
+  .hb-mark:hover line,
+  .hb-mark:focus-visible rect:not(.hb-hit),
+  .hb-mark:focus-visible line {
+    filter: brightness(1.35);
+    transform: translateY(-1px);
+    transition:
+      transform var(--dur-fast) var(--ease-out),
+      filter var(--dur-fast) var(--ease-out);
+  }
+  .run-flash {
+    animation: run-flash 1.5s var(--ease-out) both;
+    border-radius: var(--radius-md);
+  }
+  @keyframes run-flash {
+    0% {
+      box-shadow: 0 0 0 0 var(--ring-soft);
+      background: var(--tint-accent);
+    }
+    35% {
+      box-shadow: 0 0 0 4px var(--ring-soft);
+      background: var(--tint-accent);
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+      background: transparent;
+    }
+  }
+  /* A tick the engine took without the model: present, but quieter than a run. */
+  .run-head.quiet {
+    font-size: var(--text-2xs);
+    opacity: 0.7;
+  }
+  .run-head.quiet .run-dot {
+    box-shadow: 0 0 0 1px var(--color-hairline);
+  }
+  /* A session bell: 09:30 open, 15:50 exits judged, 16:00 close. The trading
+     day becomes visible structure in the transcript. */
+  .bell {
+    @apply flex items-center gap-2;
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+  }
+  .bell::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: repeating-linear-gradient(90deg, var(--color-hairline) 0 3px, transparent 3px 7px);
+  }
+  /* Streaming: a light sweep over the text — an assistant saying it is still
+     there, without a spinner. */
+  .shimmer-text {
+    background: linear-gradient(90deg, var(--color-muted) 0%, var(--color-muted) 35%, var(--color-text) 50%, var(--color-muted) 65%, var(--color-muted) 100%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 1.8s linear infinite;
+  }
+  @keyframes shimmer {
+    from {
+      background-position: 120% 0;
+    }
+    to {
+      background-position: -120% 0;
+    }
+  }
+  /* Height animation without measuring: grid rows 0fr → 1fr. */
+  .fold {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--dur) var(--ease-out);
+  }
+  .fold[data-open='true'] {
+    grid-template-rows: 1fr;
+  }
+  .fold > * {
+    min-height: 0;
+    overflow: hidden;
+  }
+  .composer-field {
+    background: var(--color-surface);
+    border-radius: var(--radius-xl);
+    box-shadow:
+      0 0 0 1px var(--color-hairline-strong),
+      var(--shadow-1);
+    transition: box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .composer-field:focus-within {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--color-accent) 68%, transparent),
+      0 0 0 3.5px var(--ring-soft);
+  }
+  .send-btn {
+    @apply inline-flex items-center justify-center shrink-0;
+    height: 28px;
+    width: 28px;
+    border-radius: 9999px;
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out);
+  }
+  .send-btn:disabled {
+    background: var(--color-surface-3);
+    color: var(--color-text-3);
+  }
+  .send-btn:not(:disabled):active {
+    transform: scale(0.92);
+  }
+  .queue-head {
+    @apply flex items-center gap-1.5;
+    padding: 0 4px;
+    font-size: var(--text-xs);
+    color: var(--color-muted);
+  }
+
+  /* ═══ Receipts (trade cards) ════════════════════════════════════════════
+     A fill is a settled fact, not a chat message: it is drawn as a slip, with
+     a side band in ink rather than colour, dotted leaders, and an ET stamp.
+     The band draws itself once on arrival — the app's one signature motion,
+     and it happens a handful of times a day. */
+  .receipt {
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 0 0 1px var(--color-hairline);
+    overflow: hidden;
+  }
+  .receipt-band {
+    position: relative;
+    height: 3px;
+    background: var(--color-surface-3);
+    overflow: hidden;
+  }
+  .receipt-band > span {
+    position: absolute;
+    inset: 0;
+    transform-origin: left center;
+    background: currentColor;
+  }
+  .receipt-band[data-fresh='true'] > span {
+    transform: scaleX(1);
+    transition: transform 240ms var(--ease-out);
+    @starting-style {
+      transform: scaleX(0);
+    }
+  }
+  .receipt-fig {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+    letter-spacing: -0.02em;
+  }
+  .stamp {
+    @apply inline-flex items-center gap-1;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    box-shadow: inset 0 0 0 1px currentColor;
+    opacity: 0.75;
+  }
+
+  /* ═══ Tool activity ═════════════════════════════════════════════════════ */
+  .tool-activity {
+    border-radius: var(--radius-md);
+    background: color-mix(in oklab, var(--color-surface-2) 50%, var(--color-surface));
+    box-shadow: 0 0 0 1px var(--color-hairline);
+    overflow: hidden;
+  }
+  .tool-activity-head {
+    @apply flex w-full items-center gap-1.5 text-left;
+    height: 30px;
+    padding: 0 10px;
+    font-size: var(--text-sm);
+    color: var(--color-text);
+  }
+  .tool-activity-head:hover {
+    background: var(--sel);
+  }
+  .tool-activity-body {
+    background: var(--color-surface);
+    box-shadow: inset 0 1px 0 var(--color-hairline);
+  }
+  .tool-row + .tool-row {
+    box-shadow: inset 0 1px 0 var(--color-line-faint);
+  }
+  .tool-row-head {
+    @apply flex w-full items-center gap-2 text-left;
+    padding: 5px 10px;
+    font-size: var(--text-sm);
+    color: var(--color-text);
+  }
+  .tool-row-head:hover {
+    background: var(--sel);
+  }
+  .tool-kind {
+    @apply inline-flex shrink-0 items-center justify-center;
+    height: 17px;
+    width: 17px;
+    border-radius: var(--radius-xs);
+  }
+  .tool-detail {
+    @apply flex flex-col gap-2.5;
+    padding: 8px 12px 12px;
+    box-shadow: inset 0 1px 0 var(--color-line-faint);
+  }
+  .tool-pane {
+    @apply overflow-auto;
+    max-height: 420px;
+    padding: 9px;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+    font-size: var(--text-sm);
+  }
+  .tool-pre {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0;
+  }
+  .tool-copy {
+    @apply inline-flex items-center gap-1;
+    height: 19px;
+    padding: 0 5px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    color: var(--color-muted);
+  }
+  .tool-copy:hover {
+    background: var(--color-surface-3);
+    color: var(--color-text);
+  }
+  .tool-kv {
+    display: grid;
+    grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+    column-gap: 12px;
+    row-gap: 4px;
+    align-items: start;
+  }
+  .tool-kv-key {
+    @apply truncate;
+    padding-top: 1px;
+    max-width: 190px;
+    font-size: var(--text-xs);
+    color: var(--color-muted);
+  }
+  .tool-kv-val {
+    @apply min-w-0;
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+  .tool-nested {
+    padding-left: 8px;
+    border-left: 1.5px solid var(--color-hairline);
+  }
+  .tool-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-xs);
+  }
+  .tool-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 5px 8px;
+    text-align: left;
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+    background: var(--color-surface);
+    box-shadow: inset 0 -1px 0 var(--color-hairline);
+    white-space: nowrap;
+  }
+  .tool-table td {
+    padding: 4px 8px;
+    max-width: 260px;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+    box-shadow: inset 0 -1px 0 var(--color-line-faint);
+  }
+  .tool-table tbody tr:last-child td {
+    box-shadow: none;
+  }
+  .tool-table tbody tr:hover td {
+    background: var(--sel);
+  }
+
+  /* ═══ Tables ════════════════════════════════════════════════════════════ */
+  .tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+  .tbl th {
+    padding: 6px 10px;
+    text-align: left;
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+    box-shadow: inset 0 -1px 0 var(--color-hairline);
+    white-space: nowrap;
+  }
+  .tbl td {
+    padding: 7px 10px;
+    box-shadow: inset 0 -1px 0 var(--color-line-faint);
+  }
+  .tbl tbody tr:last-child td {
+    box-shadow: none;
+  }
+  .tbl .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ═══ Sheets, dialogs, popovers ═════════════════════════════════════════ */
+  .sheet-backdrop {
+    /* A scrim DARKENS, in both schemes. Mixing it from --color-text made it a
+       near-white wash on every dark palette, which lit the page up instead of
+       pushing it back and left the sheet looking unanchored. */
+    background: var(--scrim);
+    opacity: 1;
+    transition: opacity var(--dur-slow) var(--ease-drawer);
+    @starting-style {
+      opacity: 0;
+    }
+  }
+  /* Rule 6 puts a 300 ms ceiling on a surface, and the sheet was over it at
+     380. It opens on `--dur-slow` and closes on `--dur`: leaving is faster than
+     arriving, because a sheet the operator has dismissed is already in the past
+     and should not make them wait to see what is behind it. Both are the named
+     steps rather than literals, so the whole app's motion still moves together. */
+  .sheet-panel {
+    transform: translateX(0);
+    transition: transform var(--dur-slow) var(--ease-drawer);
+    box-shadow: var(--shadow-sheet);
+    @starting-style {
+      transform: translateX(100%);
+    }
+  }
+  [data-closing='true'] .sheet-backdrop {
+    opacity: 0;
+    transition-duration: var(--dur);
+  }
+  [data-closing='true'] .sheet-panel {
+    transform: translateX(100%);
+    transition-duration: var(--dur);
+  }
+  /* Popovers grow out of their trigger (set `transform-origin` at the mount
+     point). Transform and opacity only, per rule 6: a blur is a paint-bound
+     filter, and this surface routinely carries live figures — a number that
+     resolves out of a smear is a number that was briefly unreadable. */
+  .pop-in,
+  .animate-in {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      transform var(--dur) var(--ease-out);
+    @starting-style {
+      opacity: 0;
+      transform: scale(0.97) translateY(-2px);
+    }
+  }
+  .fade-in {
+    opacity: 1;
+    transition: opacity var(--dur-slow) var(--ease-out);
+    @starting-style {
+      opacity: 0;
+    }
+  }
+
+  /* ═══ Command palette ═══════════════════════════════════════════════════ */
+  .palette {
+    width: min(620px, 92vw);
+    border-radius: var(--radius-xl);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-float);
+    overflow: hidden;
+  }
+  .palette-input {
+    @apply w-full outline-none bg-transparent;
+    height: 46px;
+    padding: 0 16px;
+    font-size: var(--text-lg);
+  }
+  .palette-input::placeholder {
+    color: var(--color-text-3);
+  }
+  .palette-row {
+    @apply flex w-full items-center gap-2.5 text-left;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-base);
+  }
+  .palette-row[data-on='true'] {
+    background: var(--sel);
+  }
+
+  /* ═══ Markdown (agent prose) ════════════════════════════════════════════ */
+  .md p {
+    margin: 0 0 0.5em;
+  }
+  .md p:last-child {
+    margin-bottom: 0;
+  }
+  .md ul,
+  .md ol {
+    margin: 0.25em 0 0.5em 1.15em;
+  }
+  .md ul {
+    list-style: disc;
+  }
+  .md ol {
+    list-style: decimal;
+  }
+  .md li + li {
+    margin-top: 0.2em;
+  }
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.87em;
+    background: color-mix(in oklab, currentColor 8%, transparent);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .md a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
+  }
+  .md strong {
+    font-weight: 600;
+  }
+  .md table {
+    border-collapse: collapse;
+    font-size: 0.93em;
+    margin: 0.4em 0 0.6em;
+    font-variant-numeric: tabular-nums;
+  }
+  .md th,
+  .md td {
+    border: 1px solid color-mix(in oklab, currentColor 14%, transparent);
+    padding: 3px 8px;
+    text-align: left;
+  }
+  .md th {
+    font-weight: 600;
+  }
+  .md pre {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: color-mix(in oklab, currentColor 7%, transparent);
+    padding: 9px 11px;
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+    margin: 0.4em 0 0.6em;
+  }
+  .md pre code {
+    background: none;
+    padding: 0;
+  }
+  .md blockquote {
+    border-left: 2px solid color-mix(in oklab, currentColor 22%, transparent);
+    margin: 0.4em 0;
+    padding-left: 10px;
+    opacity: 0.85;
+  }
+  .md h1,
+  .md h2,
+  .md h3 {
+    font-weight: 600;
+    margin: 0.6em 0 0.3em;
+  }
+  .md h1 {
+    font-size: 1.15em;
+  }
+  .md h2 {
+    font-size: 1.08em;
+  }
+  .md h3 {
+    font-size: 1em;
+  }
+
+  /* ═══ Bits ══════════════════════════════════════════════════════════════ */
+  .dot {
+    @apply inline-block shrink-0;
+    height: 6px;
+    width: 6px;
+    border-radius: 9999px;
+  }
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+  .pulse {
+    animation: pulse-soft 1.6s ease-in-out infinite;
+  }
+  @keyframes typing {
+    0%,
+    80%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.4;
+    }
+    40% {
+      transform: translateY(-3px);
+      opacity: 1;
+    }
+  }
+  .typing > span {
+    @apply inline-block;
+    height: 5px;
+    width: 5px;
+    margin: 0 1.5px;
+    border-radius: 9999px;
+    background: currentColor;
+    animation: typing 1.2s infinite;
+  }
+  .typing > span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .typing > span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  .skeleton {
+    background: linear-gradient(90deg, var(--color-surface-2) 25%, var(--color-surface-3) 50%, var(--color-surface-2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+    border-radius: var(--radius-sm);
+  }
+  /* The drag target when an agent is being moved between groups. */
+  .drop-target {
+    box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--color-accent) 55%, transparent);
+    background: var(--tint-accent);
+  }
+  .drop-line {
+    height: 2px;
+    border-radius: 2px;
+    background: var(--color-accent);
+  }
+}
+
+/* ── Real time: the hero chart's one-shot cues and the feed's row entry ──
+   Transform/opacity only, keyed per instant by the components, so each cue
+   plays once on the point it belongs to. Reduced motion turns them off. */
+.rt-slide,
+.rt-tag {
+  transition: transform 0.3s linear;
+}
+.rt-halo,
+.rt-ripple,
+.rt-bead-pop,
+.rt-cell-pop,
+.rt-cell-glow {
+  transform-box: fill-box;
+  transform-origin: center;
+  pointer-events: none;
+}
+.rt-halo {
+  animation: rt-halo 2.2s ease-out infinite;
+}
+@keyframes rt-halo {
+  0% { transform: scale(1); opacity: 0.3; }
+  70%, 100% { transform: scale(3); opacity: 0; }
+}
+.rt-ripple {
+  vector-effect: non-scaling-stroke;
+  animation: rt-ripple 0.7s ease-out forwards;
+}
+@keyframes rt-ripple {
+  from { transform: scale(1); opacity: 0.9; }
+  to { transform: scale(5.3); opacity: 0; }
+}
+.rt-bead-pop { animation: rt-bead-pop 0.3s ease-out; }
+@keyframes rt-bead-pop { from { transform: scale(1.8); } to { transform: scale(1); } }
+.rt-riser { pointer-events: none; animation: rt-riser 0.9s ease-out forwards; }
+@keyframes rt-riser { from { opacity: 0.35; } to { opacity: 0; } }
+.rt-cell-pop { animation: rt-cell-pop 0.25s ease-out; }
+@keyframes rt-cell-pop { from { transform: scale(1.6); } to { transform: scale(1); } }
+.rt-cell-glow { animation: rt-cell-glow 0.6s ease-out forwards; }
+@keyframes rt-cell-glow { from { transform: scale(1.4); opacity: 0.35; } to { transform: scale(2.3); opacity: 0; } }
+.rt-fade-in { animation: rt-fade-in 0.3s ease-out; }
+@keyframes rt-fade-in { from { opacity: 0.45; } to { opacity: 1; } }
+.rt-word-pop { transform-origin: right center; animation: rt-word-pop 0.25s ease-out; }
+@keyframes rt-word-pop { from { transform: scale(1.06); } to { transform: scale(1); } }
+.rt-bar { transition: width 0.25s linear, background 0.25s; }
+.rt-row-new { animation: rt-row-in 0.25s ease-out both; }
+@keyframes rt-row-in { from { transform: translateY(-6px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .rt-slide, .rt-tag, .rt-bar { transition: none; }
+  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new { animation: none; }
+  .rt-halo, .rt-ripple, .rt-riser, .rt-cell-glow { opacity: 0; }
+}

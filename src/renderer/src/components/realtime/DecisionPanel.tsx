@@ -69,7 +69,7 @@ export function DecisionPanel({ config, symbol, latest, state }: { config: Realt
             {v!.trendIntact !== undefined && <BarRow label="intact" value={v!.trendIntact} active={v!.trendIntact > 1 - g.sellThreshold} color="var(--color-up)" dim={DIM.buy} />}
           </>
         ) : (
-          <p className="text-xs text-muted">{latest ? latest.detail : 'The model has not been asked about this symbol yet.'}</p>
+          <p className="text-xs text-muted">{latest ? latest.detail : 'Nothing yet — the first check asks the model and the answer lands here.'}</p>
         )}
         {latest && offered.length > 0 && (
           <p className={cn('text-xs mt-2.5', latest.outcome === 'blocked' ? 'text-warn' : latest.outcome === 'error' ? 'text-down' : 'text-muted')}>

@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Position } from '@shared/ledger'
 import { money } from '@shared/ledger'
@@ -70,7 +70,8 @@ export function RealtimeChart({
   exit,
   effectiveStop,
   dayPnl,
-  allocation
+  allocation,
+  empty
 }: {
   symbol: string
   points: PricePoint[]
@@ -80,6 +81,8 @@ export function RealtimeChart({
   effectiveStop: number | null
   dayPnl: number | null
   allocation: number
+  /** What to show before the first price — the page says why there is none yet. */
+  empty?: ReactNode
 }): JSX.Element {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const scaleRef = useRef<{ lo: number; hi: number; t: number; symbol: string } | null>(null)
@@ -256,7 +259,7 @@ export function RealtimeChart({
       onPointerLeave={() => setHover(null)}
     >
       {!model ? (
-        <div className="absolute inset-0 flex items-center justify-center text-sm text-muted">{points.length ? 'measuring…' : 'waiting for the first price…'}</div>
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-muted">{points.length ? 'measuring…' : (empty ?? 'waiting for the first price…')}</div>
       ) : (
         <>
           <svg className="absolute inset-0 block" viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true">

@@ -30,7 +30,8 @@ const cfgCache = new Map<string, RealtimeConfig>()
 const stateCache = new Map<string, RealtimeState>()
 
 function normalizeConfig(c: RealtimeConfig): RealtimeConfig {
-  return { ...c, style: c.style ?? '', status: c.status === 'running' ? 'running' : 'paused', guardrails: clampRealtimeGuardrails(c.guardrails) }
+  // Configs written before crypto existed have no class: they are stocks.
+  return { ...c, assetClass: c.assetClass === 'crypto' ? 'crypto' : 'stocks', style: c.style ?? '', status: c.status === 'running' ? 'running' : 'paused', guardrails: clampRealtimeGuardrails(c.guardrails) }
 }
 function normalizeState(c: RealtimeConfig, s: Partial<RealtimeState> | null): RealtimeState {
   return { ...emptyRealtimeState(c.allocation), ...(s ?? {}) }

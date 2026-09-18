@@ -99,9 +99,13 @@ export function averageDailyRangePct(bars: Bar[], period = 14): number | null {
 
 /**
  * Derive one symbol's analysis from daily bars (RSI/EMA/avg volume) and
- * intraday bars for the CURRENT last session (VWAP, day range, gap).
+ * intraday bars for the CURRENT last session (VWAP, day range, gap). A
+ * `continuous` market (crypto) has no 09:30 open: the opening range, the
+ * minutes since the open and the gap are left null rather than measured
+ * against a bell that never rang.
  */
-export function analyzeSymbol(symbol: string, dayBars: Bar[], intraBars: Bar[], prevClose?: number): SymbolAnalysis {
+export function analyzeSymbol(symbol: string, dayBars: Bar[], intraBars: Bar[], prevClose?: number, opts: { continuous?: boolean } = {}): SymbolAnalysis {
+  const continuous = opts.continuous === true
   const dayCloses = dayBars.map((b) => b.c).filter((v) => v > 0)
   const today = intraBars
   const dayOpen = today[0]?.o ?? null
@@ -120,8 +124,8 @@ export function analyzeSymbol(symbol: string, dayBars: Bar[], intraBars: Bar[], 
   const completed = today.length ? dayBars.slice(0, -1) : dayBars
   // Bar times are epoch SECONDS; minutes since the 09:30 open, from the last bar.
   const lastT = today.length ? today[today.length - 1].t : null
-  const minutesSinceOpen = lastT !== null ? minutesAfterOpen(lastT) : null
-  const first15 = today.filter((b) => minutesAfterOpen(b.t) < 15)
+  const minutesSinceOpen = lastT !== null && !continuous ? minutesAfterOpen(lastT) : null
+  const first15 = continuous ? [] : today.filter((b) => minutesAfterOpen(b.t) < 15)
   return {
     symbol,
     last,
@@ -133,7 +137,7 @@ export function analyzeSymbol(symbol: string, dayBars: Bar[], intraBars: Bar[], 
     ema9: ema(dayCloses.slice(-60), 9),
     ema21: ema(dayCloses.slice(-60), 21),
     volVsAvg: avgVol > 0 && todayVol > 0 ? todayVol / avgVol : null,
-    gapPct: pc && dayOpen ? ((dayOpen - pc) / pc) * 100 : null,
+    gapPct: pc && dayOpen && !continuous ? ((dayOpen - pc) / pc) * 100 : null,
     atr14: atr(completed.slice(-60)),
     dailyRangePct: averageDailyRangePct(completed),
     minutesSinceOpen,

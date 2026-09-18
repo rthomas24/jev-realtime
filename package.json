@@ -1,7 +1,7 @@
 {
   "name": "jev-realtime",
   "version": "0.1.0",
-  "description": "Paper trading agents on a live tape, decided every second by TypeSafe's Jev (System One). Electron desktop app.",
+  "description": "Paper trading agents for stocks and crypto on a live tape, decided every second by TypeSafe's Jev (System One). Electron desktop app.",
   "author": "Ryan T",
   "license": "MIT",
   "private": true,

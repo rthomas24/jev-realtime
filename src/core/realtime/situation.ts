@@ -1,7 +1,7 @@
 import type { Quote } from '@shared/ipc'
 import type { Position } from '@shared/ledger'
 import { money } from '@shared/ledger'
-import type { RealtimeConfig, RealtimeExit } from '@shared/realtimeAgents'
+import { isContinuousMarket, type RealtimeConfig, type RealtimeExit } from '@shared/realtimeAgents'
 import { formatMinutes, OPEN_MINUTES, sessionCloseMinutes, type EtClock } from '@shared/marketTime'
 import type { Bar } from '../market/feed'
 import type { TapeSnapshot } from '../market/tape'
@@ -135,8 +135,8 @@ function barPattern(bars: Bar[]): string | null {
   return parts.join('; ')
 }
 
-/** The live tape in words: the touch, the last seconds, who is hitting the book. */
-function describeTape(t: TapeSnapshot, nowMs: number): Record<string, unknown> {
+/** The live tape in words: the touch, the last seconds, who is hitting the book. `unit` is "shares" or "units". */
+function describeTape(t: TapeSnapshot, nowMs: number, unit: string): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   const age = Math.max(0, (nowMs - t.lastTradeAt) / 1000)
   out.last_print = `${px(t.last)}, ${age < 1 ? 'under a second' : `${age.toFixed(0)} s`} ago`
@@ -144,7 +144,7 @@ function describeTape(t: TapeSnapshot, nowMs: number): Record<string, unknown> {
     out.touch = `bid ${px(t.bid)} × ${t.bidSize ?? '?'} / ask ${px(t.ask)} × ${t.askSize ?? '?'}${t.spreadPct !== null ? ` — ${t.spreadPct.toFixed(3)}% wide` : ''}`
     if (t.bidSize && t.askSize) {
       const r = t.askSize / t.bidSize
-      out.book_lean = r >= 2 ? `${r.toFixed(1)}× more shares offered than bid at the touch (sellers stacked)` : r <= 0.5 ? `${(1 / r).toFixed(1)}× more shares bid than offered at the touch (buyers stacked)` : 'roughly balanced at the touch'
+      out.book_lean = r >= 2 ? `${r.toFixed(1)}× more ${unit} offered than bid at the touch (sellers stacked)` : r <= 0.5 ? `${(1 / r).toFixed(1)}× more ${unit} bid than offered at the touch (buyers stacked)` : 'roughly balanced at the touch'
     }
   }
   const moves: Record<string, string> = {}
@@ -156,19 +156,21 @@ function describeTape(t: TapeSnapshot, nowMs: number): Record<string, unknown> {
   const classified = f.buyShares + f.sellShares
   if (classified > 0) {
     const buyPct = Math.round((f.buyShares / classified) * 100)
-    out.flow_last_minute = `${f.prints} prints, ${classified.toLocaleString('en-US')} classified shares: ${buyPct >= 65 ? `buyers lifting the offer (${buyPct}% at the ask)` : buyPct <= 35 ? `sellers hitting the bid (${100 - buyPct}% at the bid)` : `two-sided (${buyPct}% at the ask)`}`
+    out.flow_last_minute = `${f.prints} prints, ${classified.toLocaleString('en-US', { maximumFractionDigits: 4 })} classified ${unit}: ${buyPct >= 65 ? `buyers lifting the offer (${buyPct}% at the ask)` : buyPct <= 35 ? `sellers hitting the bid (${100 - buyPct}% at the bid)` : `two-sided (${buyPct}% at the ask)`}`
   } else if (f.prints > 0) out.flow_last_minute = `${f.prints} prints, mostly inside the spread`
   out.pace = t.printsPerMinute >= 60 ? `very active — about ${t.printsPerMinute} prints a minute` : t.printsPerMinute >= 15 ? `active — about ${t.printsPerMinute} prints a minute` : `quiet — about ${t.printsPerMinute} prints a minute`
   if (t.recent.length >= 4) out.recent_prints_oldest_first = t.recent.map((p) => p.toFixed(2)).join(' ')
   return out
 }
 
-function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guardrails'], nowMs: number): Record<string, unknown> {
+function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guardrails'], nowMs: number, continuous: boolean): Record<string, unknown> {
   const last = s.quote.last
   const a = s.analysis
+  const unit = continuous ? 'units' : 'shares'
   const price: Record<string, unknown> = { last: px(last) }
   if (!s.tape && s.quote.bid && s.quote.ask && s.quote.ask > s.quote.bid) price.spread = `${(((s.quote.ask - s.quote.bid) / last) * 100).toFixed(2)}% wide`
-  if (s.quote.prevClose) price.vs_yesterday_close = signed(pct(last, s.quote.prevClose))
+  // A crypto "day" rolls at midnight UTC; the prior close is named for what it is.
+  if (s.quote.prevClose) price[continuous ? 'vs_previous_utc_day_close' : 'vs_yesterday_close'] = signed(pct(last, s.quote.prevClose))
   if (a?.dayOpen) price.vs_today_open = signed(pct(last, a.dayOpen))
   if (a?.vwap) price.vs_vwap = `${signed(pct(last, a.vwap))} — ${last >= a.vwap ? 'above' : 'below'} VWAP (${px(a.vwap)})`
   const rp = rangeWords(last, a?.dayHigh ?? null, a?.dayLow ?? null)
@@ -201,7 +203,7 @@ function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guar
     const held = Math.max(0, (nowMs - Date.parse(s.exit.enteredAt)) / 60_000)
     position = {
       side: 'long',
-      shares: String(p.qty),
+      [unit]: String(p.qty),
       entered: `${held < 1 ? `${Math.round(held * 60)} seconds` : `${Math.round(held)} minute${Math.round(held) === 1 ? '' : 's'}`} ago at ${px(p.avgCost)}`,
       unrealized: signed(pct(last, p.avgCost)),
       high_since_entry: `${px(s.exit.high)} (${signed(pct(s.exit.high, p.avgCost))} from the entry)`,
@@ -210,17 +212,17 @@ function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guar
       target: `${px(s.exit.target)} — ${Math.abs(pct(s.exit.target, last)).toFixed(2)}% above the current price`
     }
   } else if (s.position) {
-    position = { side: 'long', shares: String(s.position.qty), unrealized: signed(pct(last, s.position.avgCost)) }
+    position = { side: 'long', [unit]: String(s.position.qty), unrealized: signed(pct(last, s.position.avgCost)) }
   }
 
   const sinceOpen = clock.minutes - OPEN_MINUTES
   const toClose = sessionCloseMinutes(clock.date) - clock.minutes
   const out: Record<string, unknown> = { price }
-  if (s.tape) out.tape = describeTape(s.tape, nowMs)
+  if (s.tape) out.tape = describeTape(s.tape, nowMs, unit)
   if (Object.keys(bars).length) out.five_minute_bars = bars
   if (Object.keys(trend).length) out.daily_trend = trend
   out.position = position
-  out.time = `${formatMinutes(clock.minutes)} ET — ${sinceOpen} minutes since the open, ${toClose} minutes to the close`
+  out.time = continuous ? `${formatMinutes(clock.minutes)} ET, ${clock.weekday} — this market trades around the clock; "today" is the ET date` : `${formatMinutes(clock.minutes)} ET — ${sinceOpen} minutes since the open, ${toClose} minutes to the close`
   return out
 }
 
@@ -233,6 +235,7 @@ function describeSymbol(s: SymbolInputs, clock: EtClock, g: RealtimeConfig['guar
  */
 export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], clock: EtClock, nowMs: number, flatAllowed: boolean): Situation {
   const g = cfg.guardrails
+  const continuous = isContinuousMarket(cfg.assetClass)
   const instruments: Record<string, unknown> = {}
   const questions: Record<string, JevQuestion> = {}
   const asked: Asked = {}
@@ -240,7 +243,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
   for (const s of inputs) {
     const holding = s.position !== null
     if (!holding && !flatAllowed) continue
-    instruments[s.symbol] = describeSymbol(s, clock, g, nowMs)
+    instruments[s.symbol] = describeSymbol(s, clock, g, nowMs, continuous)
     const ref = `instruments.${s.symbol}`
     const q: AskedSymbol = { direction: `${s.symbol}__direction` }
     questions[q.direction] = {
@@ -299,13 +302,14 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
     }
     asked[s.symbol] = q
   }
+  const exits = `A buy opens a position sized by the operator's limits with a ${g.stopLossPct}% stop and a ${g.takeProfitPct}% target${g.trailPct ? ` plus a ${g.trailPct}% trailing stop` : ''}; a sell closes the whole position. The engine enforces every stop and target itself.`
   const state = {
     trader: {
-      style: cfg.style || 'Disciplined intraday momentum trading: buy strength that is confirmed by trend and volume, take profits at the target, cut losses at the stop.',
-      rules: `Long only, one position per symbol, out of everything by ${g.flattenAt} ET. A buy opens a position sized by the operator's limits with a ${g.stopLossPct}% stop and a ${g.takeProfitPct}% target${g.trailPct ? ` plus a ${g.trailPct}% trailing stop` : ''}; a sell closes the whole position. The engine enforces every stop and target itself.`,
-      cadence: `Each instrument is checked every ${cfg.intervalSec === 1 ? 'second' : `${cfg.intervalSec} seconds`} through the session; the questions are about ${horizon}.`
+      style: cfg.style || (continuous ? 'Disciplined short-term momentum trading in crypto spot pairs: buy strength that is confirmed by trend and flow, take profits at the target, cut losses at the stop.' : 'Disciplined intraday momentum trading: buy strength that is confirmed by trend and volume, take profits at the target, cut losses at the stop.'),
+      rules: continuous ? `Long only, one position per pair, no session close: a position is held until the model closes it or a level does. ${exits}` : `Long only, one position per symbol, out of everything by ${g.flattenAt} ET. ${exits}`,
+      cadence: `Each instrument is checked every ${cfg.intervalSec === 1 ? 'second' : `${cfg.intervalSec} seconds`} ${continuous ? 'around the clock' : 'through the session'}; the questions are about ${horizon}.`
     },
-    session: `Regular US equity session, ${clock.weekday} ${clock.date}.`,
+    session: continuous ? `Crypto spot market, open around the clock — ${clock.weekday} ${clock.date} in ET.` : `Regular US equity session, ${clock.weekday} ${clock.date}.`,
     instruments
   }
   return { state, questions, asked }

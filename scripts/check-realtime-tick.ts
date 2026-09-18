@@ -8,12 +8,14 @@
  *   - quiet ticks (no price change) never call the model; off-session ticks decide nothing
  *   - the day-loss lock stops buys and only buys; no key means no decision, said so
  *   - the answers are read back by the ids the situation handed out, never by parsing keys
+ *   - a crypto agent (continuous market) decides at any hour, never flattens, has no entry
+ *     window, settles at once, and describes itself to the model without a bell
  *
  * Run: `npm run check`
  */
 import { emptyLedger } from '@shared/ledger'
 import { etDateTime } from '@shared/marketTime'
-import { clampRealtimeGuardrails, emptyRealtimeState, REALTIME_DEFAULTS, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
+import { clampRealtimeGuardrails, emptyRealtimeState, normCryptoSymbol, normRealtimeSymbols, realtimeConfigProblem, REALTIME_DEFAULTS, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
 import type { Decider } from '@core/realtime/jev'
 import { entriesClosed, entrySize, exitTrigger, newExit, verdictIntent } from '@core/realtime/policy'
 import { buildSituation } from '@core/realtime/situation'
@@ -35,6 +37,7 @@ const at = (hhmm: string): Date => {
 const cfg: RealtimeConfig = {
   id: 'rt_test',
   name: 'Test',
+  assetClass: 'stocks',
   symbols: ['NVDA', 'AAPL'],
   allocation: 10_000,
   intervalSec: 15,
@@ -246,6 +249,48 @@ async function main(): Promise<void> {
     const tapeSit = buildSituation(cfg, [{ symbol: 'NVDA', quote: q('NVDA', 100), analysis: null, intraBars: [], position: null, exit: null, tape: { symbol: 'NVDA', last: 100, lastTradeAt: Date.parse('2026-09-16T14:09:59.500Z'), bid: 99.99, ask: 100.01, bidSize: 200, askSize: 600, spreadPct: 0.02, returns: { s10: 0.05, s60: -0.12, m5: 0.3 }, flow60: { buyShares: 900, sellShares: 300, prints: 40 }, printsPerMinute: 40, recent: [99.9, 99.95, 100, 100.02, 100], updatedAt: Date.parse('2026-09-16T14:09:59.500Z') } }], clock, Date.parse('2026-09-16T14:10:00.000Z'), true)
     const tp = (tapeSit.state as { instruments: Record<string, { tape: Record<string, unknown> }> }).instruments.NVDA.tape
     check('the tape is described in words: the touch, the lean, the flow, the moves', /bid \$99\.99 × 200/.test(String(tp.touch)) && /sellers stacked/.test(String(tp.book_lean)) && /buyers lifting the offer \(75% at the ask\)/.test(String(tp.flow_last_minute)) && (tp.moves as Record<string, string>).last_10_seconds === 'up 0.050%', JSON.stringify(tp))
+  }
+
+  console.log('\n— crypto: a continuous market —')
+  {
+    const crypto: RealtimeConfig = { ...cfg, id: 'rt_crypto', name: 'Coins', assetClass: 'crypto', symbols: ['BTC/USD', 'ETH/USD'] }
+    const runC = (state: RealtimeState, now: Date, quotes: Quote[], decider: Decider | null) => runRealtimeTick({ cfg: crypto, state, now, quotes, failed: [], intraBars: {}, dayBars: {}, decider, modelTimeoutMs: 1000 })
+    const typed = normRealtimeSymbols(['btc', 'BTC-USD', 'BTCUSD', 'eth_usdt', 'sol/usd', 'x', '???'], 'crypto').join()
+    check('symbols normalise to BASE/QUOTE: btc, BTC-USD, BTCUSD, eth_usdt, sol/usd', typed === 'BTC/USD,ETH/USDT,SOL/USD', typed)
+    check('a bare quote currency alone is not a pair', normCryptoSymbol('USD') === null && normCryptoSymbol('usd/usd') === null)
+    check('the refusal sentence talks about coins for a crypto agent', /coins/i.test(realtimeConfigProblem({ symbols: ['??'], assetClass: 'crypto' }) ?? ''))
+
+    // 8 PM ET on a Wednesday: a stock agent would say session.closed; crypto decides and buys.
+    const jev = scripted({ 'BTC/USD': { buy: 0.9 }, 'ETH/USD': { buy: 0.1 } })
+    const night = await runC(emptyRealtimeState(crypto.allocation), at('20:00'), [q('BTC/USD', 60_000), q('ETH/USD', 2_400)], jev)
+    const btc = night.tick.decisions.find((d) => d.symbol === 'BTC/USD')!
+    check('8 PM ET: the crypto agent decides (no session) and the buy fills', jev.calls === 1 && btc.outcome === 'filled' && btc.rule === 'jev.buy' && night.tick.session === 'open', `${btc.rule} ${btc.outcome} ${night.tick.session}`)
+    check('a fractional quantity of BTC is booked at 25% of the allocation', btc.fill !== undefined && btc.fill.qty < 1 && btc.fill.qty > 0 && Math.abs(btc.econ!.notional - 2500) < 5, `${btc.fill?.qty} ${btc.econ?.notional}`)
+
+    // 15:55 ET would flatten a stock; 09:35 would be before the entry window. Neither applies.
+    const late = await runC(night.state, at('15:55'), [q('BTC/USD', 60_100), q('ETH/USD', 2_400)], scripted({ 'BTC/USD': { sell: 0.1 }, 'ETH/USD': { buy: 0.1 } }))
+    const held = late.tick.decisions.find((d) => d.symbol === 'BTC/USD')!
+    check('15:55 ET does not flatten a crypto position; the model is asked and holds', held.rule === 'jev.hold' && late.state.ledger.positions.length === 1, held.rule)
+    const early = await runC(late.state, at('09:35'), [q('BTC/USD', 60_200), q('ETH/USD', 2_401)], scripted({ 'BTC/USD': { sell: 0.1 }, 'ETH/USD': { buy: 0.9 } }))
+    const eth = early.tick.decisions.find((d) => d.symbol === 'ETH/USD')!
+    check('09:35 ET is not before the entry window for crypto: ETH buys', eth.outcome === 'filled' && eth.rule === 'jev.buy', `${eth.rule} ${eth.outcome}`)
+
+    // Instant settlement: sell BTC, and the proceeds are spendable on the very next tick.
+    const sold = await runC(early.state, at('10:00'), [q('BTC/USD', 60_500), q('ETH/USD', 2_402)], scripted({ 'BTC/USD': { sell: 0.9 }, 'ETH/USD': { sell: 0.1 } }))
+    const sb = sold.tick.decisions.find((d) => d.symbol === 'BTC/USD')!
+    check('the sell fills with no unsettled lot behind it and no settlement date on the card', sb.outcome === 'filled' && sb.fill?.side === 'sell' && (sold.state.ledger.unsettled ?? []).length === 0 && sb.econ?.settlesOn === undefined, JSON.stringify({ lots: sold.state.ledger.unsettled, settlesOn: sb.econ?.settlesOn }))
+    const g = crypto.guardrails
+    const sizeNow = entrySize(g, crypto.allocation, sold.state.ledger, DAY, 60_500, true)
+    const sizeStock = entrySize(g, crypto.allocation, { ...sold.state.ledger, unsettled: [{ amount: sold.state.ledger.cash, ts: 'x', settlesOn: '2099-01-01' }] }, DAY, 60_500)
+    check('entrySize with instant settlement spends the whole cash; the T+1 rule would refuse the same book', !('rule' in sizeNow) && 'rule' in sizeStock && sizeStock.rule === 'cap.cash')
+    const lateClock = { date: DAY, minutes: 15 * 60 + 58, weekday: 'Wed' as const, hour: 15, minute: 58, second: 0 }
+    check('the stops and the day-loss lock still apply', exitTrigger(newExit(100, g, '2026-09-16T14:00:00.000Z'), 98, g, lateClock, true)?.rule === 'exit.stop' && entriesClosed(g, { buyLocked: true }, lateClock, true)?.rule === 'lock.dailyLoss')
+    check('exitTrigger never flattens a continuous market', exitTrigger(newExit(100, g, '2026-09-16T14:00:00.000Z'), 100.5, g, lateClock, true) === null)
+
+    const clock = { date: DAY, minutes: 20 * 60, weekday: 'Wed' as const, hour: 20, minute: 0, second: 0 }
+    const sit = buildSituation(crypto, [{ symbol: 'BTC/USD', quote: q('BTC/USD', 60_000), analysis: null, intraBars: [], position: { symbol: 'BTC/USD', qty: 0.04, avgCost: 59_000 }, exit: newExit(59_000, g, '2026-09-17T00:00:00.000Z') }], clock, Date.parse('2026-09-17T00:10:00.000Z'), true)
+    const st = sit.state as { session: string; trader: { rules: string }; instruments: Record<string, { time: string; position: Record<string, string> }> }
+    check('the situation says the market is open around the clock and names no flatten time', /around the clock/.test(st.session) && /around the clock/.test(st.instruments['BTC/USD'].time) && !/out of everything by/.test(st.trader.rules) && st.instruments['BTC/USD'].position.units === '0.04', JSON.stringify({ session: st.session, time: st.instruments['BTC/USD'].time }))
   }
 
   console.log(failures ? `\n${failures} FAILED` : '\nall ok')

@@ -36,6 +36,15 @@ console.log('— the wire —')
   check('malformed frames yield nothing rather than throwing', parseAlpacaMessages('{not json').length === 0 && parseAlpacaMessages('null').length === 0)
   check('a single object frame is accepted too', parseAlpacaMessages(JSON.stringify({ T: 'success', msg: 'connected' }))[0]?.kind === 'connected')
   check('the feed picks the url', alpacaStreamUrl('iex') === 'wss://stream.data.alpaca.markets/v2/iex' && alpacaStreamUrl('test') === 'wss://stream.data.alpaca.markets/v2/test')
+  check('crypto has its own socket', alpacaStreamUrl('crypto') === 'wss://stream.data.alpaca.markets/v1beta3/crypto/us')
+  // The crypto socket's frames: the same shape, a pair for a symbol, a taker side on the trade, fractional sizes.
+  const cryptoFrame = JSON.stringify([
+    { T: 't', S: 'BTC/USD', p: 76527.1, s: 0.000083, t: '2026-09-18T01:24:19.550166609Z', i: 8012479237256725631, tks: 'S' },
+    { T: 'q', S: 'BTC/USD', bp: 76506.74, bs: 0.00099017, ap: 76518.619, as: 0.000995, t: '2026-09-18T01:26:14.698211979Z' }
+  ])
+  const c = parseAlpacaMessages(cryptoFrame)
+  check('a crypto trade parses with its pair and fractional size', c[0].kind === 'trade' && c[0].symbol === 'BTC/USD' && c[0].trade.p === 76527.1 && c[0].trade.s === 0.000083)
+  check('a crypto quote parses with fractional sizes', c[1].kind === 'quote' && c[1].quote.bid === 76506.74 && c[1].quote.askSize === 0.000995)
 }
 
 console.log('\n— the tape —')

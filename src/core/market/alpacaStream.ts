@@ -1,12 +1,16 @@
 import type { TapeQuote, TapeTrade } from './tape'
 
 /**
- * Alpaca Market Data's WebSocket stream (`wss://stream.data.alpaca.markets/v2/<feed>`),
- * as a small client with reconnect. Why this vendor: the platform's polled feed
- * is already Alpaca (`alpaca.ts`), the free plan streams IEX prints and quotes
- * in real time, and a `test` feed prints a fake symbol (`FAKEPACA`) around the
- * clock so the whole path can be watched with the market closed. One
- * connection per account is allowed, so this holds exactly one.
+ * Alpaca Market Data's WebSocket stream (`wss://stream.data.alpaca.markets/v2/<feed>`
+ * for stocks, `.../v1beta3/crypto/us` for crypto), as a small client with
+ * reconnect. Why this vendor: the polled feeds are already Alpaca
+ * (`alpaca.ts`, `alpacaCrypto.ts`), the free plan streams IEX prints and
+ * quotes in real time and crypto prints and quotes around the clock, and a
+ * `test` feed prints a fake symbol (`FAKEPACA`) 24/7 so the whole path can be
+ * watched with the market closed. One connection per account is allowed PER
+ * ENDPOINT, so the host holds one stocks socket and one crypto socket; the
+ * crypto one speaks the same auth, subscribe, trade and quote messages
+ * (crypto trades add a taker side, `tks`, which the tape does not need).
  *
  * ⚠️ The key here is the OPERATOR's own (entered on the Real time page, kept
  * on this computer), never the platform's — the platform's key never reaches
@@ -15,7 +19,7 @@ import type { TapeQuote, TapeTrade } from './tape'
  * `parseAlpacaMessages` is pure so the wire format is pinned by a check
  * without a socket; the socket is the global `WebSocket` (Node ≥ 22).
  */
-export type AlpacaFeed = 'iex' | 'sip' | 'test'
+export type AlpacaFeed = 'iex' | 'sip' | 'test' | 'crypto'
 
 export interface StreamEvents {
   trade(symbol: string, t: TapeTrade): void
@@ -76,7 +80,7 @@ export function alpacaErrorIsFatal(code: number): boolean {
 }
 
 export function alpacaStreamUrl(feed: AlpacaFeed): string {
-  return `wss://stream.data.alpaca.markets/v2/${feed}`
+  return feed === 'crypto' ? 'wss://stream.data.alpaca.markets/v1beta3/crypto/us' : `wss://stream.data.alpaca.markets/v2/${feed}`
 }
 
 const BACKOFF_MIN_MS = 1_000

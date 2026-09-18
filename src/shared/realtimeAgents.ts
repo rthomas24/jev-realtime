@@ -39,6 +39,22 @@ export const REALTIME_PAGE_TICKS_MAX = 3000
 /** A tape snapshot older than this is not a price; the tick falls back to the polled feed. */
 export const REALTIME_TAPE_STALE_MS = 15_000
 
+/**
+ * What an agent trades. Stocks are US equities on the regular session with
+ * T+1 settlement; crypto is spot pairs (`BTC/USD`) that trade around the
+ * clock and settle at once. The class is fixed at creation — one book, one
+ * kind of thing in it — and every session rule reads it: a crypto agent has
+ * no open, no close, no flatten time and no entry window.
+ */
+export type AssetClass = 'stocks' | 'crypto'
+export const REALTIME_ASSET_CLASS_LABEL: Record<AssetClass, string> = { stocks: 'Stocks', crypto: 'Crypto' }
+/** Markets with no session: always open, no flatten, instant settlement. */
+export function isContinuousMarket(assetClass: AssetClass | undefined): boolean {
+  return assetClass === 'crypto'
+}
+/** The quote currencies a crypto pair may be priced in; a bare `BTC` means `BTC/USD`. */
+const CRYPTO_QUOTES = ['USD', 'USDT', 'USDC', 'BTC']
+
 /** The live data stream behind one-second decisions: the operator's own market-data key, on this computer only. */
 export type RealtimeStreamFeed = 'iex' | 'sip' | 'test'
 export interface RealtimeStreamKeyRequest {
@@ -47,10 +63,8 @@ export interface RealtimeStreamKeyRequest {
   feed: RealtimeStreamFeed
 }
 export type RealtimeStreamState = 'off' | 'connecting' | 'live' | 'reconnecting' | 'error'
-export interface RealtimeStreamStatus {
-  /** A key is stored. */
-  configured: boolean
-  feed: RealtimeStreamFeed
+/** One stream connection's state: stocks and crypto are separate sockets on the same key. */
+export interface RealtimeStreamLeg {
   state: RealtimeStreamState
   /** The last error or the reason it is off, when there is one. */
   detail?: string
@@ -60,6 +74,15 @@ export interface RealtimeStreamStatus {
   /** Trades received since the stream opened. */
   trades: number
 }
+export interface RealtimeStreamStatus extends RealtimeStreamLeg {
+  /** A key is stored. */
+  configured: boolean
+  /** The stocks feed; crypto has one feed. */
+  feed: RealtimeStreamFeed
+  /** The crypto socket (`v1beta3/crypto/us`), opened whenever a crypto agent runs — around the clock. */
+  crypto: RealtimeStreamLeg
+}
+export const REALTIME_STREAM_LEG_OFF: RealtimeStreamLeg = { state: 'off', symbols: [], trades: 0 }
 export const REALTIME_STREAM_FEED_LABEL: Record<RealtimeStreamFeed, string> = { iex: 'IEX (free, real time)', sip: 'SIP (all exchanges, paid plan)', test: 'Test stream (fake prints, 24/7)' }
 
 /** One quote sample for the chart — every running agent's symbols in one row, no state behind it. */
@@ -127,6 +150,8 @@ export type RealtimeStatus = 'running' | 'paused'
 export interface RealtimeConfig {
   id: string
   name: string
+  /** Fixed at creation; older configs without it are stocks. */
+  assetClass: AssetClass
   symbols: string[]
   allocation: number
   intervalSec: number
@@ -304,6 +329,8 @@ export interface RealtimeSummary {
 
 export interface RealtimeCreateRequest {
   name: string
+  /** Default `stocks`. */
+  assetClass?: AssetClass
   symbols: string[]
   allocation: number
   intervalSec: number
@@ -353,15 +380,40 @@ export function clampRealtimeGuardrails(g: Partial<RealtimeGuardrails> | undefin
   }
 }
 
-/** Upper-cased, de-duplicated, capped — the same normalisation every feed does. */
-export function normRealtimeSymbols(symbols: readonly string[]): string[] {
-  return [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z.]{1,6}$/.test(s)))].slice(0, REALTIME_MAX_SYMBOLS)
+/**
+ * One crypto pair as the feed names it: `BASE/QUOTE`, upper-cased. Accepts
+ * what people type — `btc`, `BTC/USD`, `BTC-USD`, `BTCUSD`, `eth_usdt` — and
+ * reads a bare coin as priced in USD. Null when it cannot be a pair.
+ */
+export function normCryptoSymbol(raw: string): string | null {
+  const s = raw.trim().toUpperCase().replace(/\s+/g, '')
+  if (!s) return null
+  let base: string
+  let quote: string
+  const sep = /^([A-Z0-9]+)[/\-_:]([A-Z]+)$/.exec(s)
+  if (sep) {
+    base = sep[1]
+    quote = sep[2]
+  } else if (/^[A-Z0-9]+$/.test(s)) {
+    const q = CRYPTO_QUOTES.find((c) => s.length > c.length + 1 && s.endsWith(c))
+    base = q ? s.slice(0, -q.length) : s
+    quote = q ?? 'USD'
+  } else return null
+  if (!/^[A-Z0-9]{2,10}$/.test(base) || !/^[A-Z]{3,5}$/.test(quote) || base === quote) return null
+  return `${base}/${quote}`
+}
+
+/** Upper-cased, de-duplicated, capped — the same normalisation every feed does. Crypto pairs come out as `BASE/QUOTE`. */
+export function normRealtimeSymbols(symbols: readonly string[], assetClass: AssetClass = 'stocks'): string[] {
+  const norm = assetClass === 'crypto' ? symbols.map(normCryptoSymbol).filter((s): s is string => s !== null) : symbols.map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z.]{1,6}$/.test(s))
+  return [...new Set(norm)].slice(0, REALTIME_MAX_SYMBOLS)
 }
 
 /** The one refusal sentence for a create/update, or null when it is fine. */
-export function realtimeConfigProblem(r: { name?: string; symbols?: string[]; allocation?: number; intervalSec?: number }): string | null {
+export function realtimeConfigProblem(r: { name?: string; symbols?: string[]; allocation?: number; intervalSec?: number; assetClass?: AssetClass }): string | null {
+  const cls = r.assetClass ?? 'stocks'
   if (r.name !== undefined && !r.name.trim()) return 'Give the agent a name.'
-  if (r.symbols !== undefined && normRealtimeSymbols(r.symbols).length === 0) return 'Add at least one symbol (tickers like NVDA, AAPL).'
+  if (r.symbols !== undefined && normRealtimeSymbols(r.symbols, cls).length === 0) return cls === 'crypto' ? 'Add at least one pair (coins like BTC, ETH, SOL — priced in USD).' : 'Add at least one symbol (tickers like NVDA, AAPL).'
   if (r.symbols !== undefined && r.symbols.length > REALTIME_MAX_SYMBOLS) return `Up to ${REALTIME_MAX_SYMBOLS} symbols per real-time agent.`
   if (r.allocation !== undefined && !(r.allocation >= 100)) return 'Allocate at least $100 of paper money.'
   if (r.intervalSec !== undefined && (r.intervalSec < REALTIME_MIN_INTERVAL_SEC || r.intervalSec > REALTIME_MAX_INTERVAL_SEC))

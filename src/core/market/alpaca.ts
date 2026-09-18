@@ -50,21 +50,45 @@ const STALE_PRINT_MS = 20 * 60_000
 const BARS_PAGE_LIMIT = 10_000
 const BARS_MAX_PAGES = 5
 
-interface Snapshot {
+/** One symbol's snapshot as Alpaca's stocks and crypto endpoints both shape it. */
+export interface AlpacaSnapshot {
   latestTrade?: { p?: number; t?: string }
   latestQuote?: { bp?: number; ap?: number; t?: string }
   minuteBar?: { c?: number; t?: string }
   dailyBar?: { o?: number; c?: number; t?: string }
   prevDailyBar?: { c?: number }
 }
+type Snapshot = AlpacaSnapshot
 
-interface RawBar {
+export interface AlpacaRawBar {
   t: string
   o: number
   h: number
   l: number
   c: number
   v: number
+}
+
+/** A snapshot as the quote shape every consumer takes; null without a usable price. */
+export function alpacaSnapshotToQuote(symbol: string, s: AlpacaSnapshot, at: number): Quote | null {
+  const last = s.latestTrade?.p ?? s.minuteBar?.c ?? s.dailyBar?.c
+  if (!(typeof last === 'number' && last > 0)) return null
+  const prevClose = s.prevDailyBar?.c
+  const q: Quote = { symbol, last, ts: s.latestTrade?.t ?? new Date(at).toISOString() }
+  if (typeof s.latestQuote?.bp === 'number' && s.latestQuote.bp > 0) q.bid = s.latestQuote.bp
+  if (typeof s.latestQuote?.ap === 'number' && s.latestQuote.ap > 0) q.ask = s.latestQuote.ap
+  if (typeof prevClose === 'number' && prevClose > 0) {
+    q.prevClose = prevClose
+    q.changePct = Math.round(((last - prevClose) / prevClose) * 10_000) / 100
+  }
+  return q
+}
+
+/** Raw bars as the engine's `Bar` (epoch seconds), junk rows dropped. */
+export function alpacaBars(rows: AlpacaRawBar[] | null | undefined): Bar[] {
+  const out: Bar[] = []
+  for (const b of rows ?? []) if (b && b.c > 0) out.push({ t: Math.floor(Date.parse(b.t) / 1000), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v })
+  return out
 }
 
 export function alpacaFeed(opts: AlpacaFeedOptions): PriceFeed {
@@ -88,19 +112,7 @@ export function alpacaFeed(opts: AlpacaFeedOptions): PriceFeed {
     return (await res.json()) as T
   }
 
-  const toQuote = (symbol: string, s: Snapshot, at: number): Quote | null => {
-    const last = s.latestTrade?.p ?? s.minuteBar?.c ?? s.dailyBar?.c
-    if (!(typeof last === 'number' && last > 0)) return null
-    const prevClose = s.prevDailyBar?.c
-    const q: Quote = { symbol, last, ts: s.latestTrade?.t ?? new Date(at).toISOString() }
-    if (typeof s.latestQuote?.bp === 'number' && s.latestQuote.bp > 0) q.bid = s.latestQuote.bp
-    if (typeof s.latestQuote?.ap === 'number' && s.latestQuote.ap > 0) q.ask = s.latestQuote.ap
-    if (typeof prevClose === 'number' && prevClose > 0) {
-      q.prevClose = prevClose
-      q.changePct = Math.round(((last - prevClose) / prevClose) * 10_000) / 100
-    }
-    return q
-  }
+  const toQuote = alpacaSnapshotToQuote
 
   /** A print is fresh enough to fill a paper order against. Outside the session nothing is fresh, and nothing needs to be. */
   const fresh = (s: Snapshot, at: number): boolean => {
@@ -187,7 +199,7 @@ export function alpacaFeed(opts: AlpacaFeedOptions): PriceFeed {
       const timeframe = interval === 'day' ? '1Day' : '5Min'
       let token: string | undefined
       for (let page = 0; page < BARS_MAX_PAGES; page++) {
-        const data = await get<{ bars?: Record<string, RawBar[] | null>; next_page_token?: string | null }>('/v2/stocks/bars', {
+        const data = await get<{ bars?: Record<string, AlpacaRawBar[] | null>; next_page_token?: string | null }>('/v2/stocks/bars', {
           symbols: syms.join(','),
           timeframe,
           start: startIso,
@@ -197,10 +209,7 @@ export function alpacaFeed(opts: AlpacaFeedOptions): PriceFeed {
           feed: primary === 'delayed_sip' ? 'sip' : primary,
           ...(token ? { page_token: token } : {})
         })
-        for (const [sym, rows] of Object.entries(data.bars ?? {})) {
-          const list = (out[sym.toUpperCase()] ??= [])
-          for (const b of rows ?? []) if (b && b.c > 0) list.push({ t: Math.floor(Date.parse(b.t) / 1000), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v })
-        }
+        for (const [sym, rows] of Object.entries(data.bars ?? {})) (out[sym.toUpperCase()] ??= []).push(...alpacaBars(rows))
         if (!data.next_page_token) break
         token = data.next_page_token
       }

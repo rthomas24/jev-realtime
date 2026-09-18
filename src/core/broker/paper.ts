@@ -29,8 +29,13 @@ function round(n: number, dp = 4): number {
   return Math.round(n * f) / f
 }
 
+/** How a fill's proceeds settle: `tplus1` (US equities, the default) or `instant` (crypto — spendable at once). */
+export interface FillOptions {
+  settlement?: 'tplus1' | 'instant'
+}
+
 /** Apply a fill to the ledger (cash, position, realized P&L). */
-export function applyFill(ledger: Ledger, fill: Omit<Fill, 'id' | 'realized' | 'ts'> & { ts?: string }): { ledger: Ledger; fill: Fill } {
+export function applyFill(ledger: Ledger, fill: Omit<Fill, 'id' | 'realized' | 'ts'> & { ts?: string }, opts: FillOptions = {}): { ledger: Ledger; fill: Fill } {
   const positions: Position[] = ledger.positions.map((p) => ({ ...p }))
   const idx = positions.findIndex((p) => p.symbol === fill.symbol)
   let realized = 0
@@ -93,7 +98,8 @@ export function applyFill(ledger: Ledger, fill: Omit<Fill, 'id' | 'realized' | '
     realized,
     orderId: fill.orderId
   }
-  if (fill.side === 'sell') unsettled.push({ amount: proceeds, ts, settlesOn: settlesOn(ts), fillId: done.id })
+  // Instant settlement (crypto) books no lot: the proceeds are spendable now.
+  if (fill.side === 'sell' && opts.settlement !== 'instant') unsettled.push({ amount: proceeds, ts, settlesOn: settlesOn(ts), fillId: done.id })
   return {
     ledger: {
       ...ledger,
@@ -133,7 +139,7 @@ export interface PaperSubmitResult {
 }
 
 /** Submit a paper order: market fills now; limit fills if marketable else rests as open. */
-export function submitPaperOrder(ledger: Ledger, o: PaperSubmit, quote: PaperQuote): PaperSubmitResult {
+export function submitPaperOrder(ledger: Ledger, o: PaperSubmit, quote: PaperQuote, opts: FillOptions = {}): PaperSubmitResult {
   const order: PaperOrder = {
     id: newId('po_'),
     ts: new Date().toISOString(),
@@ -154,7 +160,7 @@ export function submitPaperOrder(ledger: Ledger, o: PaperSubmit, quote: PaperQuo
     (o.limitPrice !== undefined && (o.side === 'buy' ? px <= o.limitPrice : px >= o.limitPrice))
   if (marketable) {
     const fillPx = o.type === 'limit' && o.limitPrice !== undefined ? (o.side === 'buy' ? Math.min(px, o.limitPrice) : Math.max(px, o.limitPrice)) : px
-    const { ledger: next, fill } = applyFill(ledger, { symbol: o.symbol, side: o.side, qty: o.qty, price: round(fillPx, 4), orderId: order.id })
+    const { ledger: next, fill } = applyFill(ledger, { symbol: o.symbol, side: o.side, qty: o.qty, price: round(fillPx, 4), orderId: order.id }, opts)
     order.status = 'filled'
     return { ledger: next, order, fill }
   }

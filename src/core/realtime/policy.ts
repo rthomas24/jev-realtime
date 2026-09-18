@@ -28,9 +28,13 @@ export function flattenMinute(g: RealtimeGuardrails, date: string): number {
   return Math.min(planned, sessionCloseMinutes(date) - 5)
 }
 
-/** Which engine exit fires at this price and minute, if any. Checked BEFORE the model is asked. */
-export function exitTrigger(exit: RealtimeExit, last: number, g: RealtimeGuardrails, clock: EtClock): Refusal | null {
-  if (clock.minutes >= flattenMinute(g, clock.date)) return { rule: 'exit.flatten', detail: `Closed at market at the ${g.flattenAt} ET cut-off.` }
+/**
+ * Which engine exit fires at this price and minute, if any. Checked BEFORE
+ * the model is asked. A `continuous` market (crypto) has no close, so no
+ * flatten: only the levels can close it.
+ */
+export function exitTrigger(exit: RealtimeExit, last: number, g: RealtimeGuardrails, clock: EtClock, continuous = false): Refusal | null {
+  if (!continuous && clock.minutes >= flattenMinute(g, clock.date)) return { rule: 'exit.flatten', detail: `Closed at market at the ${g.flattenAt} ET cut-off.` }
   const stop = effectiveStop(exit, g)
   if (last <= stop) {
     const trailing = g.trailPct !== null && stop > exit.stop
@@ -58,12 +62,15 @@ export function ratchetHigh(exit: RealtimeExit, last: number): RealtimeExit {
  * that hold for every symbol. Checked before any flat symbol is described to
  * the model, because a verdict that cannot be acted on is not worth asking for.
  */
-export function entriesClosed(g: RealtimeGuardrails, state: Pick<RealtimeState, 'buyLocked'>, clock: EtClock): Refusal | null {
-  const before = parseHHMM(g.noEntriesBeforeEt)
-  const after = parseHHMM(g.noEntriesAfterEt)
-  if (before !== null && clock.minutes < before) return { rule: 'entry.beforeWindow', detail: `No entries before ${g.noEntriesBeforeEt} ET.` }
-  if (after !== null && clock.minutes >= after) return { rule: 'entry.afterWindow', detail: `No entries from ${g.noEntriesAfterEt} ET.` }
-  if (clock.minutes >= flattenMinute(g, clock.date)) return { rule: 'entry.afterWindow', detail: `Past the ${g.flattenAt} ET flatten.` }
+export function entriesClosed(g: RealtimeGuardrails, state: Pick<RealtimeState, 'buyLocked'>, clock: EtClock, continuous = false): Refusal | null {
+  // A continuous market has no entry window and no flatten; the day-loss lock still holds (its day is the ET date).
+  if (!continuous) {
+    const before = parseHHMM(g.noEntriesBeforeEt)
+    const after = parseHHMM(g.noEntriesAfterEt)
+    if (before !== null && clock.minutes < before) return { rule: 'entry.beforeWindow', detail: `No entries before ${g.noEntriesBeforeEt} ET.` }
+    if (after !== null && clock.minutes >= after) return { rule: 'entry.afterWindow', detail: `No entries from ${g.noEntriesAfterEt} ET.` }
+    if (clock.minutes >= flattenMinute(g, clock.date)) return { rule: 'entry.afterWindow', detail: `Past the ${g.flattenAt} ET flatten.` }
+  }
   if (state.buyLocked) return { rule: 'lock.dailyLoss', detail: `Buys are locked for the day: the book is down more than ${g.maxDailyLossPct}% of its allocation.` }
   return null
 }
@@ -82,9 +89,9 @@ export function entryBlocked(symbol: string, g: RealtimeGuardrails, state: Pick<
   return null
 }
 
-/** Shares to buy: the smaller of the per-symbol cap and the settled cash, or a refusal. */
-export function entrySize(g: RealtimeGuardrails, allocation: number, ledger: Ledger, etDate: string, price: number): { qty: number; notional: number } | Refusal {
-  const settled = settledCash(ledger, etDate)
+/** Shares (or units) to buy: the smaller of the per-symbol cap and the settled cash, or a refusal. With `instantSettlement` (crypto) every dollar of cash is settled. */
+export function entrySize(g: RealtimeGuardrails, allocation: number, ledger: Ledger, etDate: string, price: number, instantSettlement = false): { qty: number; notional: number } | Refusal {
+  const settled = instantSettlement ? Math.max(0, ledger.cash) : settledCash(ledger, etDate)
   const cap = allocation * (g.maxPositionPct / 100)
   const notional = Math.min(cap, settled)
   if (settled < REALTIME_MIN_ORDER_USD) return { rule: 'cap.cash', detail: `Settled cash is ${money(settled)}${ledger.cash - settled > 0.005 ? ` (${money(ledger.cash - settled)} settles tomorrow)` : ''}.` }

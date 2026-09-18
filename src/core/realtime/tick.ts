@@ -3,7 +3,7 @@ import type { Fill, Ledger } from '@shared/ledger'
 import { fillEconomics as fillEconomicsRaw, money, newId } from '@shared/ledger'
 import { settlesOn } from '@shared/settlement'
 import { etClock, isRegularSession, sessionLabel } from '@shared/marketTime'
-import { REALTIME_RECENT_TICKS, realtimeEquity, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
+import { isContinuousMarket, REALTIME_RECENT_TICKS, realtimeEquity, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
 import { redactSecrets } from '../redact'
 import type { Bar } from '../market/feed'
 import type { TapeSnapshot } from '../market/tape'
@@ -48,7 +48,7 @@ export interface TickInputs {
   decider: Decider | null
   /** Budget for the model round trip. */
   modelTimeoutMs: number
-  /** Overrides the clock's session check (the test stream prints around the clock). Default: the regular session. */
+  /** Overrides the clock's session check (the test stream prints around the clock). Default: the regular session, or always for a continuous market (crypto). */
   sessionOpen?: boolean
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void
 }
@@ -59,18 +59,21 @@ export interface TickResult {
 }
 
 const r2 = (n: number): number => Math.round(n * 100) / 100
-const fillEconomics = (before: Ledger, after: Ledger, fill: Fill) => fillEconomicsRaw(before, after, fill, settlesOn)
 
 export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
   const { cfg, now } = i
   const g = cfg.guardrails
+  // A continuous market (crypto): no session, no flatten, no entry window,
+  // instant settlement. Every rule below reads this one flag.
+  const continuous = isContinuousMarket(cfg.assetClass)
+  const fillEconomics = (before: Ledger, after: Ledger, fill: Fill) => fillEconomicsRaw(before, after, fill, continuous ? undefined : settlesOn)
   const clock = etClock(now)
   const nowIso = now.toISOString()
   const log = i.log ?? (() => undefined)
   let state: RealtimeState = { ...i.state, exits: { ...i.state.exits }, lastSellAt: { ...i.state.lastSellAt }, lastQuotes: { ...i.state.lastQuotes } }
   let ledger: Ledger = state.ledger
   const decisions: RealtimeDecision[] = []
-  const tick: RealtimeTick = { id: newId('rt_'), at: nowIso, session: sessionLabel(now), decisions, equity: 0, unrealized: 0 }
+  const tick: RealtimeTick = { id: newId('rt_'), at: nowIso, session: continuous ? 'open' : sessionLabel(now), decisions, equity: 0, unrealized: 0 }
   const finish = (): TickResult => {
     const marked = realtimeEquity({ ledger, lastQuotes: state.lastQuotes })
     tick.equity = marked.equity
@@ -96,7 +99,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
   }
   state.ticksToday += 1
 
-  if (!(i.sessionOpen ?? isRegularSession(now))) {
+  if (!(i.sessionOpen ?? (continuous || isRegularSession(now)))) {
     tick.skipped = 'Outside the regular session.'
     for (const s of priced) decisions.push({ symbol: s, price: quoteMap.get(s)!.last, intent: 'none', outcome: 'held', rule: 'session.closed', detail: 'Decisions are made during the regular session only.' })
     return finish()
@@ -108,7 +111,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
     const q = paperQuotes[symbol]
     if (!q) return null
     const before = ledger
-    const r = submitPaperOrder(ledger, { symbol, side, qty, type: 'market', tif: 'day' }, q)
+    const r = submitPaperOrder(ledger, { symbol, side, qty, type: 'market', tif: 'day' }, q, { settlement: continuous ? 'instant' : 'tplus1' })
     if (!r.fill) return null
     ledger = r.ledger
     return { fill: r.fill, before }
@@ -120,7 +123,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
     if (!last || !exit) continue
     const ratcheted = ratchetHigh(exit, last)
     state.exits[p.symbol] = ratcheted
-    const hit = exitTrigger(ratcheted, last, g, clock)
+    const hit = exitTrigger(ratcheted, last, g, clock, continuous)
     if (!hit) continue
     const r = book('sell', p.symbol, p.qty)
     if (!r) continue
@@ -139,7 +142,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
 
   // 4. Who still needs a decision. Flat symbols only while entries are open;
   //    the refusal is recorded per symbol so the tape explains the silence.
-  const closed = entriesClosed(g, state, clock)
+  const closed = entriesClosed(g, state, clock, continuous)
   const held = new Set(ledger.positions.map((p) => p.symbol))
   const candidates: string[] = []
   for (const s of priced) {
@@ -181,7 +184,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
     const intraLast = lastSessionBars(intraAll)
     const intra = intraLast.length && etClock(new Date(intraLast[intraLast.length - 1].t * 1000)).date === clock.date ? intraLast : []
     const day = i.dayBars[s] ?? []
-    const analysis = day.length || intra.length ? analyzeSymbol(s, day, intra, q.prevClose) : null
+    const analysis = day.length || intra.length ? analyzeSymbol(s, day, intra, q.prevClose, { continuous }) : null
     const pos = ledger.positions.find((p) => p.symbol === s) ?? null
     return {
       symbol: s,
@@ -247,7 +250,7 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
       decisions.push({ symbol: s, price: last, verdict: v, intent: 'buy', outcome: 'blocked', rule: blocked.rule, detail: `${read.detail} ${blocked.detail}` })
       continue
     }
-    const size = entrySize(g, cfg.allocation, ledger, clock.date, paperQuotes[s].ask && paperQuotes[s].ask! > 0 ? paperQuotes[s].ask! : last)
+    const size = entrySize(g, cfg.allocation, ledger, clock.date, paperQuotes[s].ask && paperQuotes[s].ask! > 0 ? paperQuotes[s].ask! : last, continuous)
     if ('rule' in size) {
       decisions.push({ symbol: s, price: last, verdict: v, intent: 'buy', outcome: 'blocked', rule: size.rule, detail: `${read.detail} ${size.detail}` })
       continue

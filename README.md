@@ -46,10 +46,20 @@ Each is its own question with its own probability, composed in code. A flat symb
 | How clean is the setup? | Score (chop / mixed / clean) | flat | needs ≥ `minSetup` |
 | How well is this symbol carrying a move today? | Score (chopping / mixed / trending) | flat | needs ≥ `minRegime` |
 | Would this repeat an entry that already failed here today? | Noul | flat | refused at ≥ `maxRepeat` |
-| Is it reversing against the position right now? | Noul | holding | closes it at ≥ `reversalThreshold` |
-| Is the move that justified the entry still intact? | Noul | holding | closes it at ≤ 1 − `sellThreshold` |
+| Is it reversing against the position right now? | Noul | holding | closes it at ≥ `reversalThreshold`, at any age |
+| Is the move that justified the entry still intact? | Noul | holding | closes it at ≤ `minTrendIntact` |
 
 The panel shows every one of them as a bar with its threshold marked, and then the checks in the order the engine applied them, so a refusal reads as a sentence: `up 76% ≥ 70% ✓ → extended 21% < 60% ✓ → setup 1.34 ≥ 1.0 ✓ → carrying 0.55 ≥ 0.8 ✗ → HOLD`.
+
+## Letting a trade work
+
+A one-second cadence will re-litigate a three-minute judgment ninety times before it has had its three minutes. The first fifteen live round trips showed exactly that: fourteen were closed by the model's own "is the move still intact?" answer, the median one lasted **two seconds**, and not one of them ever traded a tenth of a percent away from its entry — nowhere near the stop, let alone the target. So three rules sit between a verdict and a sell:
+
+- **`minHoldSec`** — the model cannot close a position younger than this (default 45 s). The stop, the trail, the target and a sharp reversal are never delayed.
+- **`sellConfirmations`** — a sell needs this many checks in a row that want out (default 2). Any check that does not resets the count. A reversal skips it.
+- **`minTrendIntact`** — the "still intact?" answer that closes a position (default 0.30). It used to be derived as 1 − `sellThreshold`, which made a middling 0.40 read a sell order.
+
+And one defect behind the losses: the trailing stop ratcheted from the entry price, so a 0.6 % trail under a 0.75 % stop *was* the stop from the first second, and every trade was cut at a small loss before the stop it was sized against could ever be tested. **`trailArmsAtPct`** (default 0.3 %) now holds the trail back until the trade has actually made something; until then the hard stop governs.
 
 ## What a check costs, and what is not asked
 

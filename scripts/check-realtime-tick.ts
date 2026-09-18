@@ -20,7 +20,7 @@ import { emptyLedger } from '@shared/ledger'
 import { etDateTime } from '@shared/marketTime'
 import { realtimeRuleLabel, clampRealtimeGuardrails, emptyRealtimeState, normCryptoSymbol, normRealtimeSymbols, realtimeConfigProblem, realtimeUsage, REALTIME_DEFAULTS, REALTIME_JEV_USD_PER_MTOK_INPUT, sumRealtimeUsage, type RealtimeConfig, type RealtimeState } from '@shared/realtimeAgents'
 import type { Decider } from '@core/realtime/jev'
-import { entriesClosed, entrySize, exitTrigger, newExit, verdictIntent } from '@core/realtime/policy'
+import { effectiveStop, entriesClosed, entrySize, exitTrigger, newExit, verdictIntent } from '@core/realtime/policy'
 import { buildSituation } from '@core/realtime/situation'
 import { closedTradesToday, pastReads, readVerdicts, runRealtimeTick } from '@core/realtime/tick'
 import type { Quote } from '@shared/ipc'
@@ -121,9 +121,12 @@ async function main(): Promise<void> {
     check('P(sell)=0.30 holds', held.outcome === 'held' && held.rule === 'jev.hold', `${held.rule}`)
     check('the high ratchets with the price', r2.state.exits.NVDA.high === 100.5)
 
-    console.log('\n— a sell verdict past the threshold closes the whole position —')
+    console.log('\n— a sell verdict past the threshold closes the whole position, on the second check in a row —')
     const jev3 = scripted({ NVDA: { sell: 0.75 }, AAPL: {} })
-    const r3 = await run(r2.state, at('10:10'), [q('NVDA', 101), q('AAPL', 201)], jev3)
+    const first = await run(r2.state, at('10:10'), [q('NVDA', 101), q('AAPL', 201)], jev3)
+    const once = first.tick.decisions.find((d) => d.symbol === 'NVDA')!
+    check('one check that wants out holds and says what it is waiting for', once.outcome === 'held' && once.rule === 'jev.unconfirmed' && first.state.ledger.positions.length === 1 && first.state.exits.NVDA.sells === 1, `${once.rule} ${once.detail}`)
+    const r3 = await run(first.state, at('10:11'), [q('NVDA', 101.2), q('AAPL', 201)], jev3)
     const sold = r3.tick.decisions.find((d) => d.symbol === 'NVDA')!
     check('sold on jev.sell with realized P&L on the card', sold.outcome === 'filled' && sold.rule === 'jev.sell' && sold.fill?.side === 'sell' && sold.econ?.realized !== undefined && sold.econ.realized > 0, `${sold.rule} ${sold.econ?.realized}`)
     check('the position and its exits are gone', r3.state.ledger.positions.length === 0 && r3.state.exits.NVDA === undefined)
@@ -131,7 +134,7 @@ async function main(): Promise<void> {
 
     console.log('\n— no cooldown: the same symbol may be bought again on the very next check —')
     const jev4 = scripted({ NVDA: { buy: 0.9 } })
-    const r4 = await run(r3.state, at('10:12'), [q('NVDA', 101.5), q('AAPL', 201)], jev4)
+    const r4 = await run(r3.state, at('10:13'), [q('NVDA', 101.5), q('AAPL', 201)], jev4)
     const again = r4.tick.decisions.find((d) => d.symbol === 'NVDA')!
     check('two minutes after the sell, a buy verdict fills again', again.outcome === 'filled' && again.rule === 'jev.buy' && again.fill?.side === 'buy', `${again.rule} ${again.outcome}`)
   }
@@ -161,9 +164,11 @@ async function main(): Promise<void> {
     check('both judgments ride on the verdict row', cn.verdict?.regime === 0.4 && ca.verdict?.repeatFail === 0.8)
     check('the verdict row carries every judgment', n.verdict?.extended === 0.8 && a.verdict?.setup === 0.4 && n.verdict?.probabilities.buy === 0.9)
     const held = await run(base(), at('10:00'), [q('NVDA', 100), q('AAPL', 200)], scripted({ NVDA: { buy: 0.9 } }))
-    const broken = await run(held.state, at('10:01'), [q('NVDA', 100.3), q('AAPL', 200)], scripted({ NVDA: { sell: 0.1, intact: 0.3 } }))
+    const jevBroken = scripted({ NVDA: { sell: 0.1, intact: 0.2 } })
+    const brokenOnce = await run(held.state, at('10:02'), [q('NVDA', 100.3), q('AAPL', 200)], jevBroken)
+    const broken = await run(brokenOnce.state, at('10:03'), [q('NVDA', 100.28), q('AAPL', 200)], jevBroken)
     const b = broken.tick.decisions.find((x) => x.symbol === 'NVDA')!
-    check('trend intact 0.30 ≤ 0.40 (1 − sell threshold) → sold as jev.trendBroken', b.outcome === 'filled' && b.rule === 'jev.trendBroken', `${b.rule} ${b.outcome}`)
+    check('intact 0.20 ≤ 0.30 on two checks in a row → sold as jev.trendBroken', b.outcome === 'filled' && b.rule === 'jev.trendBroken', `${b.rule} ${b.outcome}`)
   }
 
   console.log('\n— engine exits fire BEFORE the model, and the model is not asked about a symbol that just exited —')
@@ -279,6 +284,44 @@ async function main(): Promise<void> {
     check('the day roll resets today, keeps all time', nextDay.state.dayModelCalls === 1 && nextDay.state.dayInputTokens === 500 && nextDay.state.modelCalls === 4 && nextDay.state.dayModelSkips === 0 && nextDay.state.modelSkips === 1, JSON.stringify(realtimeUsage(nextDay.state)))
     check('clampRealtimeGuardrails defaults the band for configs written before it existed', clampRealtimeGuardrails({}).askMinMovePct === 0.02 && clampRealtimeGuardrails({}).askAtLeastEverySec === 10 && clampRealtimeGuardrails({ askMinMovePct: -1, askAtLeastEverySec: 0 }).askMinMovePct === 0 && clampRealtimeGuardrails({ askAtLeastEverySec: 0 }).askAtLeastEverySec === 1)
   }
+
+  console.log('\n— a trade is given room to work —')
+  {
+    // Every one of the first fifteen live round trips died within seconds of
+    // being opened, on the model's own re-read, having never moved a tenth of
+    // a percent in either direction. These are the rules that stop that.
+    const buy = scripted({ NVDA: { buy: 0.9 } })
+    const opened = await run(base(), at('10:00'), [q('NVDA', 100), q('AAPL', 200)], buy)
+    check('(setup) NVDA is long', opened.state.ledger.positions.length === 1)
+    const wantsOut = scripted({ NVDA: { sell: 0.9, intact: 0.1 }, AAPL: {} })
+    const twoSec = await run(opened.state, new Date(at('10:00').getTime() + 2000), [q('NVDA', 99.96), q('AAPL', 200)], wantsOut)
+    const young = twoSec.tick.decisions.find((d) => d.symbol === 'NVDA')!
+    check('two seconds in, the model cannot close it: jev.young, and the position stands', young.outcome === 'held' && young.rule === 'jev.young' && twoSec.state.ledger.positions.length === 1, `${young.rule} · ${young.detail}`)
+    check('the refusal says how old the trade is and how long it is left alone', /Opened 2 s ago/.test(young.detail) && /45 s/.test(young.detail), young.detail)
+    check('a young trade banks no confirmations, so the clock does not start early', twoSec.state.exits.NVDA.sells === 0, String(twoSec.state.exits.NVDA.sells))
+    // The one judgment that closes a position at any age.
+    const reversal = await run(opened.state, new Date(at('10:00').getTime() + 2000), [q('NVDA', 99.96), q('AAPL', 200)], scripted({ NVDA: { sell: 0.2, reversal: 0.95 } }))
+    check('a sharp reversal still closes it two seconds in', reversal.tick.decisions.find((d) => d.symbol === 'NVDA')!.rule === 'jev.reversal')
+    // And so does a level.
+    const stopped = await run(opened.state, new Date(at('10:00').getTime() + 2000), [q('NVDA', 98.5), q('AAPL', 200)], wantsOut)
+    check('so does the stop', stopped.tick.decisions.find((d) => d.symbol === 'NVDA')!.rule === 'exit.stop')
+    // Past the window, it still takes two checks in a row.
+    const oneMin = await run(opened.state, at('10:01'), [q('NVDA', 99.96), q('AAPL', 200)], wantsOut)
+    check('past the window the first check only arms the second', oneMin.tick.decisions.find((d) => d.symbol === 'NVDA')!.rule === 'jev.unconfirmed' && oneMin.state.exits.NVDA.sells === 1)
+    const calm = await run(oneMin.state, at('10:02'), [q('NVDA', 100.1), q('AAPL', 200)], scripted({ NVDA: { sell: 0.1, intact: 0.9 } }))
+    check('a check that no longer wants out resets the count', calm.state.exits.NVDA.sells === 0 && calm.state.ledger.positions.length === 1)
+    const gone = await run(oneMin.state, at('10:02'), [q('NVDA', 99.9), q('AAPL', 200)], wantsOut)
+    check('two in a row closes it', gone.tick.decisions.find((d) => d.symbol === 'NVDA')!.outcome === 'filled')
+
+    // The trail used to sit above the stop from the first second.
+    const g = cfg.guardrails
+    const ex = newExit(100, g, '2026-09-16T14:00:00.000Z')
+    check('with the trade never in profit the hard stop governs, not the trail', effectiveStop({ ...ex, high: 100 }, g) === ex.stop && effectiveStop({ ...ex, high: 100.2 }, g) === ex.stop, `${effectiveStop({ ...ex, high: 100 }, g)} vs ${ex.stop}`)
+    check('once it has been up past the arming point the trail takes over', effectiveStop({ ...ex, high: 101 }, g) > ex.stop, `${effectiveStop({ ...ex, high: 101 }, g)}`)
+    const noTrail = { ...g, trailPct: null }
+    check('no trail configured, no trail applied', effectiveStop({ ...ex, high: 105 }, noTrail) === ex.stop)
+  }
+
 
   console.log('\n— labels outlive the rules —')
   {
@@ -406,7 +449,11 @@ async function main(): Promise<void> {
     check('09:35 ET is not before the entry window for crypto: ETH buys', eth.outcome === 'filled' && eth.rule === 'jev.buy', `${eth.rule} ${eth.outcome}`)
 
     // Instant settlement: sell BTC, and the proceeds are spendable on the very next tick.
-    const sold = await runC(early.state, at('10:00'), [q('BTC/USD', 60_500), q('ETH/USD', 2_402)], scripted({ 'BTC/USD': { sell: 0.9 }, 'ETH/USD': { sell: 0.1 } }))
+    const jevSell = scripted({ 'BTC/USD': { sell: 0.9 }, 'ETH/USD': { sell: 0.1 } })
+    // After the 8 PM entry, not before it: the rest of this block walks the
+    // clock backwards on purpose, and a position cannot be older than it is.
+    const soldOnce = await runC(early.state, at('21:00'), [q('BTC/USD', 60_500), q('ETH/USD', 2_402)], jevSell)
+    const sold = await runC(soldOnce.state, at('21:01'), [q('BTC/USD', 60_450), q('ETH/USD', 2_402)], jevSell)
     const sb = sold.tick.decisions.find((d) => d.symbol === 'BTC/USD')!
     check('the sell fills with no unsettled lot behind it and no settlement date on the card', sb.outcome === 'filled' && sb.fill?.side === 'sell' && (sold.state.ledger.unsettled ?? []).length === 0 && sb.econ?.settlesOn === undefined, JSON.stringify({ lots: sold.state.ledger.unsettled, settlesOn: sb.econ?.settlesOn }))
     const g = crypto.guardrails

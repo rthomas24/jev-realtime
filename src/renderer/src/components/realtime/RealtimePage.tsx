@@ -423,6 +423,7 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
         <NumberField label="Stop-loss" value={f.g.stopLossPct} onChange={(v) => setG({ stopLossPct: v ?? REALTIME_DEFAULTS.stopLossPct })} suffix="%" min={0.1} max={20} />
         <NumberField label="Take-profit" value={f.g.takeProfitPct} onChange={(v) => setG({ takeProfitPct: v ?? REALTIME_DEFAULTS.takeProfitPct })} suffix="%" min={0.1} max={50} />
         <NumberField label="Trailing stop" hint="Below the high since entry. Blank turns it off." value={f.g.trailPct} onChange={(v) => setG({ trailPct: v })} suffix="%" min={0.1} max={20} nullable />
+        <NumberField label="Trail starts once up" hint="Until the trade has made this much, the hard stop governs. A trail that ratchets from the entry is tighter than the stop and cuts every trade early." value={f.g.trailArmsAtPct} onChange={(v) => setG({ trailArmsAtPct: v ?? REALTIME_DEFAULTS.trailArmsAtPct })} suffix="%" step={0.05} min={0} max={20} />
         {!continuous && <TimeField label="Flatten everything at" hint="Out at market whatever the price — nothing is held into the close." value={f.g.flattenAt} onChange={(v) => setG({ flattenAt: v })} />}
       </div>
 
@@ -440,9 +441,16 @@ function AgentForm({ existing, onClose }: { existing?: RealtimeConfig; onClose: 
       <div className="card overflow-hidden divide-hair mb-5">
         <NumberField label="Buy when P(buy) ≥" value={f.g.buyThreshold} onChange={(v) => setG({ buyThreshold: v ?? REALTIME_DEFAULTS.buyThreshold })} step={0.05} min={0.5} max={0.99} />
         <NumberField label="Sell when P(sell) ≥" value={f.g.sellThreshold} onChange={(v) => setG({ sellThreshold: v ?? REALTIME_DEFAULTS.sellThreshold })} step={0.05} min={0.5} max={0.99} />
-        <NumberField label="Sell on reversal ≥" hint="A separate yes/no question about a sharp reversal against the position; this alone closes it." value={f.g.reversalThreshold} onChange={(v) => setG({ reversalThreshold: v ?? REALTIME_DEFAULTS.reversalThreshold })} step={0.05} min={0.5} max={0.99} />
+        <NumberField label="Sell on reversal ≥" hint="A separate yes/no question about a sharp reversal against the position; this alone closes it, at any age." value={f.g.reversalThreshold} onChange={(v) => setG({ reversalThreshold: v ?? REALTIME_DEFAULTS.reversalThreshold })} step={0.05} min={0.5} max={0.99} />
+        <NumberField label="Sell when intact ≤" hint="The model's answer to whether the move that justified the entry still stands. Lower means more room." value={f.g.minTrendIntact} onChange={(v) => setG({ minTrendIntact: v ?? REALTIME_DEFAULTS.minTrendIntact })} step={0.05} min={0.05} max={0.9} />
         <NumberField label="Buy only if carrying ≥" hint="How well the symbol has been carrying moves today, 0 chop … 2 trending, judged partly on how this agent's own trades in it turned out." value={f.g.minRegime} onChange={(v) => setG({ minRegime: v ?? REALTIME_DEFAULTS.minRegime })} step={0.1} min={0} max={2} />
         <NumberField label="Refuse a repeat at ≥" hint="Probability that a buy here repeats an entry that already failed in this symbol today." value={f.g.maxRepeat} onChange={(v) => setG({ maxRepeat: v ?? REALTIME_DEFAULTS.maxRepeat })} step={0.05} min={0.05} max={1} />
+      </div>
+
+      <SectionHead title="Patience" hint="A trade is opened on a judgment about the next few minutes. These stop it being closed on a re-read seconds later; the stop, the target and a sharp reversal are never delayed." />
+      <div className="card overflow-hidden divide-hair mb-5">
+        <NumberField label="Leave a new trade alone for" hint="The model cannot close a position younger than this. Levels and reversals still can." value={f.g.minHoldSec} onChange={(v) => setG({ minHoldSec: v ?? REALTIME_DEFAULTS.minHoldSec })} suffix="s" step={5} min={0} max={3600} />
+        <NumberField label="Checks in a row to close" hint="How many consecutive checks must want out before the position is sold. A reversal skips this." value={f.g.sellConfirmations} onChange={(v) => setG({ sellConfirmations: v ?? REALTIME_DEFAULTS.sellConfirmations })} step={1} min={1} max={10} />
       </div>
 
       <SectionHead title="Model spend" hint="Every check that asks the model pays for its input tokens. A tape that has barely moved gets the last verdict instead — the same situation gets the same answer." />

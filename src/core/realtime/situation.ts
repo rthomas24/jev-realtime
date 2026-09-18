@@ -362,7 +362,12 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       q.intact = `${s.symbol}__intact`
       questions[q.reversal] = {
         type: 'noul',
-        instructions: { question: `Is \`${ref}\` showing a sharp reversal AGAINST the trader's long position right now?`, inspect: path, focus: 'A reversal is decisive, not a pause: a fast move down on heavy selling, a failed breakout, or the pattern that carried it up breaking.' },
+        instructions: {
+          question: `Is \`${ref}\` showing a sharp reversal AGAINST the trader's long position right now?`,
+          inspect: path,
+          focus: 'A reversal is decisive, not a pause: a fast move down on heavy selling, a failed breakout, or the pattern that carried it up breaking.',
+          note: 'The engine already takes the stop and the target. This is the one answer that closes a position early, so it is about a turn, not about a dip.'
+        },
         criteria: {
           true: { what: 'Yes — the tape has turned against the position decisively.', examples: ['sellers hitting the bid for most of the last minute and the price is falling through recent lows', 'a breakout above the opening range that failed and is now back inside it'] },
           false: { what: 'No — an ordinary pullback, chop, or continued strength.', examples: ['a small dip inside the trend with buyers still lifting the offer', 'a flat tape near the high'] }
@@ -370,10 +375,23 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
       }
       questions[q.intact] = {
         type: 'noul',
-        instructions: { question: `Is the move that justified entering \`${ref}\` still intact?`, inspect: path, focus: 'Judge the position\'s reason to exist: trend, flow and the level it entered above. This is separate from whether a reversal is happening right now.' },
+        instructions: {
+          question: `Is the move that justified entering \`${ref}\` still intact?`,
+          inspect: path,
+          focus: `Judge the position's reason to exist over ${horizon}, not the last few seconds: the trend, the flow and the level it entered above. This is separate from whether a reversal is happening right now.`,
+          note: 'Holding is the normal answer. A pause, a pullback that holds, a quiet tape or a few ticks against the position are the ordinary shape of a trade that is still working; the trade is given room to reach its target and the engine takes the stop if it does not.'
+        },
         criteria: {
-          true: { what: 'Yes — the trend and the flow that carried the entry are still there.', signals: 'higher lows since the entry, buyers still active, price above the entry level and above VWAP' },
-          false: { what: 'No — the reason to be in the trade has gone, even without a sharp reversal.', signals: 'momentum faded to a two-sided drift, price back below the entry level, flow turned to sellers' }
+          true: {
+            what: 'Yes — the trend and the flow that carried the entry are still there, or the move is simply resting.',
+            signals: 'higher lows since the entry, buyers still active, price above the entry level and above VWAP, a quiet pullback that has not broken anything',
+            examples: ['up half a percent and drifting sideways on thin volume', 'a dip that stopped at the level it broke out from']
+          },
+          false: {
+            what: 'No — the reason to be in the trade has gone, and not merely paused.',
+            not_for: 'An ordinary pullback, a quiet tape, or the price sitting a little under the entry without anything breaking.',
+            signals: 'the level the entry was built on has given way, flow has turned to sellers and stayed there, the move has fully retraced'
+          }
         }
       }
     } else {
@@ -433,7 +451,7 @@ export function buildSituation(cfg: RealtimeConfig, inputs: SymbolInputs[], cloc
   const state = {
     trader: {
       style: cfg.style || (continuous ? 'Disciplined short-term momentum trading in crypto spot pairs: buy strength that is confirmed by trend and flow, take profits at the target, cut losses at the stop.' : 'Disciplined intraday momentum trading: buy strength that is confirmed by trend and volume, take profits at the target, cut losses at the stop.'),
-      rules: 'Long only, one position per instrument; a sell closes the whole position.'
+      rules: `Long only, one position per instrument; a sell closes the whole position. A position is held while its reason stands: the engine takes the stop or the target by itself, so there is nothing to gain by closing a working trade early, and the horizon of every judgment is ${horizon}.`
     },
     session: continuous ? `Crypto spot market, open around the clock — ${clock.weekday} ${clock.date} in ET.` : `Regular US equity session, ${clock.weekday} ${clock.date}.`,
     ...(book ? { book: describeBook(book, cfg, continuous) } : {}),

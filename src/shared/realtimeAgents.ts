@@ -106,6 +106,13 @@ export interface RealtimeGuardrails {
   takeProfitPct: number
   /** Trailing stop below the high since entry, %; null = none. */
   trailPct: number | null
+  /**
+   * The trail only starts once the trade has been up this much. A trail that
+   * ratchets from the entry is tighter than the stop from the first second,
+   * which takes every trade out at a small loss before the stop it was sized
+   * against is ever reached.
+   */
+  trailArmsAtPct: number
   /** Day's loss (vs the day's opening equity, as % of allocation) that locks BUYS for the rest of the day. */
   maxDailyLossPct: number
   /** ET "HH:MM" — every position is closed at market from this minute. */
@@ -120,6 +127,17 @@ export interface RealtimeGuardrails {
   buyThreshold: number
   /** Minimum probability the model must put on `sell` to close one. */
   sellThreshold: number
+  /**
+   * A position younger than this is left alone by the model. The stop, the
+   * trail and the target still apply, and so does a sharp reversal — but a
+   * trade opened on a judgment about the next few minutes is not closed on a
+   * re-read two seconds later.
+   */
+  minHoldSec: number
+  /** How many checks in a row must want out before the position is closed. A reversal skips this. */
+  sellConfirmations: number
+  /** The position is closed when the model's "the move is still intact" answer falls to this or below. */
+  minTrendIntact: number
   /** Probability on the "sharp reversal against the position" question that closes it on its own. */
   reversalThreshold: number
   /** The horizon the direction question is asked over, in minutes. */
@@ -148,6 +166,7 @@ export const REALTIME_DEFAULTS: RealtimeGuardrails = {
   stopLossPct: 0.75,
   takeProfitPct: 1.5,
   trailPct: 0.6,
+  trailArmsAtPct: 0.3,
   maxDailyLossPct: 2,
   flattenAt: '15:55',
   noEntriesBeforeEt: '09:45',
@@ -155,6 +174,9 @@ export const REALTIME_DEFAULTS: RealtimeGuardrails = {
   maxEntryExtensionPct: 1.5,
   buyThreshold: 0.7,
   sellThreshold: 0.6,
+  minHoldSec: 45,
+  sellConfirmations: 2,
+  minTrendIntact: 0.3,
   reversalThreshold: 0.85,
   horizonMin: 3,
   maxExtended: 0.6,
@@ -230,6 +252,8 @@ export type RealtimeRule =
   | 'jev.chop'
   | 'jev.repeat'
   | 'jev.belowThreshold'
+  | 'jev.young'
+  | 'jev.unconfirmed'
   | 'jev.error'
   | 'jev.noKey'
   | 'exit.stop'
@@ -259,6 +283,8 @@ export const REALTIME_RULE_LABEL: Record<RealtimeRule, string> = {
   'jev.chop': 'Model: chopping today',
   'jev.repeat': 'Model: this already failed today',
   'jev.belowThreshold': 'Below the threshold',
+  'jev.young': 'Too new to close',
+  'jev.unconfirmed': 'Waiting for a second read',
   'jev.error': 'Model unavailable',
   'jev.noKey': 'No TypeSafe key',
   'exit.stop': 'Stop-loss hit',
@@ -332,6 +358,8 @@ export interface RealtimeExit {
   target: number
   /** Highest price seen since entry — what a trail ratchets from. */
   high: number
+  /** Checks in a row that wanted out; reset by any check that does not. */
+  sells?: number
 }
 
 export interface RealtimeState {
@@ -428,6 +456,7 @@ export function clampRealtimeGuardrails(g: Partial<RealtimeGuardrails> | undefin
     stopLossPct: clamp(num(src.stopLossPct, d.stopLossPct), 0.1, 20),
     takeProfitPct: clamp(num(src.takeProfitPct, d.takeProfitPct), 0.1, 50),
     trailPct: trail === null ? null : clamp(trail, 0.1, 20),
+    trailArmsAtPct: clamp(num(src.trailArmsAtPct, d.trailArmsAtPct), 0, 20),
     maxDailyLossPct: clamp(num(src.maxDailyLossPct, d.maxDailyLossPct), 0.1, 50),
     flattenAt: hhmm(src.flattenAt, d.flattenAt),
     noEntriesBeforeEt: hhmm(src.noEntriesBeforeEt, d.noEntriesBeforeEt),
@@ -435,6 +464,9 @@ export function clampRealtimeGuardrails(g: Partial<RealtimeGuardrails> | undefin
     maxEntryExtensionPct: ext === null ? null : clamp(ext, 0.1, 20),
     buyThreshold: clamp(num(src.buyThreshold, d.buyThreshold), 0.5, 0.99),
     sellThreshold: clamp(num(src.sellThreshold, d.sellThreshold), 0.5, 0.99),
+    minHoldSec: clamp(Math.round(num(src.minHoldSec, d.minHoldSec)), 0, 3600),
+    sellConfirmations: clamp(Math.round(num(src.sellConfirmations, d.sellConfirmations)), 1, 10),
+    minTrendIntact: clamp(num(src.minTrendIntact, d.minTrendIntact), 0.01, 0.9),
     reversalThreshold: clamp(num(src.reversalThreshold, d.reversalThreshold), 0.5, 0.99),
     horizonMin: clamp(Math.round(num(src.horizonMin, d.horizonMin)), 1, 60),
     maxExtended: clamp(num(src.maxExtended, d.maxExtended), 0.05, 1),

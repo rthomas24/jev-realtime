@@ -312,7 +312,9 @@ export async function runRealtimeTick(i: TickInputs): Promise<TickResult> {
       continue
     }
     const holding = held.has(s)
-    const read = verdictIntent(v, holding, g)
+    const exit = state.exits[s]
+    const read = verdictIntent(v, holding, g, { ageSec: exit ? Math.max(0, (now.getTime() - Date.parse(exit.enteredAt)) / 1000) : 0, sells: exit?.sells ?? 0 })
+    if (holding && exit && read.sells !== undefined && read.sells !== (exit.sells ?? 0)) state.exits[s] = { ...exit, sells: read.sells }
     if (read.intent === 'hold') {
       decisions.push({ symbol: s, price: last, verdict: v, intent: 'hold', outcome: 'held', rule: read.rule, detail: read.detail })
       continue

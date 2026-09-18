@@ -16,9 +16,17 @@ export interface Refusal {
   detail: string
 }
 
-/** The stop the engine enforces: the hard stop, or the trail from the high — whichever is higher. */
+/**
+ * The stop the engine enforces: the hard stop, or the trail from the high —
+ * whichever is higher. The trail only counts once the trade has actually been
+ * up by `trailArmsAtPct`; before that it would sit above the stop from the
+ * first second (a 0.6% trail under a 0.75% stop is a 0.6% stop), and every
+ * trade would be cut at a small loss without the stop it was sized against
+ * ever being tested.
+ */
 export function effectiveStop(exit: RealtimeExit, g: RealtimeGuardrails): number {
-  const trail = g.trailPct !== null ? exit.high * (1 - g.trailPct / 100) : 0
+  const armed = g.trailPct !== null && exit.high >= exit.entryPrice * (1 + g.trailArmsAtPct / 100)
+  const trail = armed ? exit.high * (1 - g.trailPct! / 100) : 0
   return Math.max(exit.stop, trail)
 }
 
@@ -49,7 +57,7 @@ export function exitTrigger(exit: RealtimeExit, last: number, g: RealtimeGuardra
 /** A fresh exit set for a fill just made. */
 export function newExit(fillPrice: number, g: RealtimeGuardrails, nowIso: string): RealtimeExit {
   const r4 = (n: number): number => Math.round(n * 1e4) / 1e4
-  return { entryPrice: fillPrice, enteredAt: nowIso, stop: r4(fillPrice * (1 - g.stopLossPct / 100)), target: r4(fillPrice * (1 + g.takeProfitPct / 100)), high: fillPrice }
+  return { entryPrice: fillPrice, enteredAt: nowIso, stop: r4(fillPrice * (1 - g.stopLossPct / 100)), target: r4(fillPrice * (1 + g.takeProfitPct / 100)), high: fillPrice, sells: 0 }
 }
 
 /** The trail ratchets from the high; the high only ever rises. */
@@ -137,15 +145,44 @@ export function dayLossLocked(g: RealtimeGuardrails, allocation: number, dayStar
  * `minSetup`; a held one is closed on a reversal, on a trend the model no
  * longer sees intact, or on a down verdict past the threshold.
  */
-export function verdictIntent(v: RealtimeVerdict, holding: boolean, g: RealtimeGuardrails): { intent: RealtimeAction; rule: RealtimeRule; detail: string } {
+export interface HoldingContext {
+  /** How long the position has been open, in seconds. */
+  ageSec: number
+  /** Checks in a row that have already wanted out. */
+  sells: number
+}
+
+export interface Intent {
+  intent: RealtimeAction
+  rule: RealtimeRule
+  detail: string
+  /** The new consecutive-sell count for a held position; absent when flat. */
+  sells?: number
+}
+
+export function verdictIntent(v: RealtimeVerdict, holding: boolean, g: RealtimeGuardrails, ctx: HoldingContext = { ageSec: Number.POSITIVE_INFINITY, sells: 0 }): Intent {
   const p = (a: RealtimeAction): number => v.probabilities[a] ?? 0
   const pctOf = (n: number): string => `${Math.round(n * 100)}%`
+  const secs = (n: number): string => (n < 90 ? `${Math.round(n)} s` : `${Math.round(n / 60)} min`)
   if (holding) {
-    if (v.reversal !== undefined && v.reversal >= g.reversalThreshold) return { intent: 'sell', rule: 'jev.reversal', detail: `Reversal ${pctOf(v.reversal)} ≥ ${pctOf(g.reversalThreshold)}.` }
-    if (v.trendIntact !== undefined && v.trendIntact <= 1 - g.sellThreshold) return { intent: 'sell', rule: 'jev.trendBroken', detail: `Trend intact only ${pctOf(v.trendIntact)} (≤ ${pctOf(1 - g.sellThreshold)}).` }
-    if (p('sell') >= g.sellThreshold) return { intent: 'sell', rule: 'jev.sell', detail: `Down ${pctOf(p('sell'))} ≥ ${pctOf(g.sellThreshold)}.` }
-    if (v.action === 'sell') return { intent: 'hold', rule: 'jev.belowThreshold', detail: `Down ${pctOf(p('sell'))} is under the ${pctOf(g.sellThreshold)} threshold — holding.` }
-    return { intent: 'hold', rule: 'jev.hold', detail: `Up ${pctOf(p('buy'))} · flat ${pctOf(p('hold'))} · down ${pctOf(p('sell'))}${v.reversal !== undefined ? ` · reversal ${pctOf(v.reversal)}` : ''}${v.trendIntact !== undefined ? ` · intact ${pctOf(v.trendIntact)}` : ''}.` }
+    // A reversal is the one judgment that closes a position at any age: it is
+    // the question that asks whether the tape has decisively turned.
+    if (v.reversal !== undefined && v.reversal >= g.reversalThreshold) return { intent: 'sell', rule: 'jev.reversal', detail: `Reversal ${pctOf(v.reversal)} ≥ ${pctOf(g.reversalThreshold)}.`, sells: 0 }
+    const broken = v.trendIntact !== undefined && v.trendIntact <= g.minTrendIntact
+    const down = p('sell') >= g.sellThreshold
+    if (broken || down) {
+      const why = broken ? `the move is intact at only ${pctOf(v.trendIntact!)} (≤ ${pctOf(g.minTrendIntact)})` : `down ${pctOf(p('sell'))} ≥ ${pctOf(g.sellThreshold)}`
+      // Young: the trade was opened on a judgment about the next few minutes
+      // and has not had them yet. Levels and reversals still close it.
+      if (ctx.ageSec < g.minHoldSec) return { intent: 'hold', rule: 'jev.young', detail: `Opened ${secs(ctx.ageSec)} ago and ${why}, but nothing except a level or a reversal closes a trade inside its first ${secs(g.minHoldSec)}.`, sells: 0 }
+      const sells = ctx.sells + 1
+      if (sells < g.sellConfirmations) return { intent: 'hold', rule: 'jev.unconfirmed', detail: `${why.charAt(0).toUpperCase()}${why.slice(1)}, on ${sells} check${sells === 1 ? '' : 's'} of the ${g.sellConfirmations} in a row it takes to close.`, sells }
+      return broken
+        ? { intent: 'sell', rule: 'jev.trendBroken', detail: `Trend intact only ${pctOf(v.trendIntact!)} (≤ ${pctOf(g.minTrendIntact)}) on ${sells} checks in a row.`, sells: 0 }
+        : { intent: 'sell', rule: 'jev.sell', detail: `Down ${pctOf(p('sell'))} ≥ ${pctOf(g.sellThreshold)} on ${sells} checks in a row.`, sells: 0 }
+    }
+    if (v.action === 'sell') return { intent: 'hold', rule: 'jev.belowThreshold', detail: `Down ${pctOf(p('sell'))} is under the ${pctOf(g.sellThreshold)} threshold — holding.`, sells: 0 }
+    return { intent: 'hold', rule: 'jev.hold', detail: `Up ${pctOf(p('buy'))} · flat ${pctOf(p('hold'))} · down ${pctOf(p('sell'))}${v.reversal !== undefined ? ` · reversal ${pctOf(v.reversal)}` : ''}${v.trendIntact !== undefined ? ` · intact ${pctOf(v.trendIntact)}` : ''}.`, sells: 0 }
   }
   if (p('buy') >= g.buyThreshold) {
     if (v.extended !== undefined && v.extended >= g.maxExtended) return { intent: 'hold', rule: 'jev.extended', detail: `Up ${pctOf(p('buy'))}, but extended ${pctOf(v.extended)} ≥ ${pctOf(g.maxExtended)} — not chasing.` }

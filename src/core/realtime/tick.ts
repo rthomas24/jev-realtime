@@ -2,7 +2,7 @@ import type { Quote } from '@shared/ipc'
 import type { Fill, Ledger } from '@shared/ledger'
 import { fillEconomics as fillEconomicsRaw, money, newId } from '@shared/ledger'
 import { settlesOn } from '@shared/settlement'
-import { etClock, isRegularSession, sessionLabel } from '@shared/marketTime'
+import { etClock, etDateOf, isRegularSession, sessionLabel } from '@shared/marketTime'
 import { isContinuousMarket, REALTIME_RECENT_TICKS, realtimeEquity, type RealtimeAction, type RealtimeConfig, type RealtimeDecision, type RealtimeGuardrails, type RealtimeState, type RealtimeTick, type RealtimeVerdict } from '@shared/realtimeAgents'
 import { redactSecrets } from '../redact'
 import type { Bar } from '../market/feed'
@@ -70,7 +70,7 @@ const r2 = (n: number): number => Math.round(n * 100) / 100
  * to work it out.
  */
 export function closedTradesToday(ledger: Ledger, symbol: string, etDate: string, g: RealtimeGuardrails, nowMs: number, max = 4): ClosedTrade[] {
-  const mine = ledger.fills.filter((f) => f.symbol === symbol && f.ts.slice(0, 10) === etDate)
+  const mine = ledger.fills.filter((f) => f.symbol === symbol && etDateOf(f.ts) === etDate)
   const out: ClosedTrade[] = []
   for (let i = mine.length - 1; i >= 0 && out.length < max; i--) {
     const sell = mine[i]

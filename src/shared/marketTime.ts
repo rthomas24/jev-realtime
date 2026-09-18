@@ -67,6 +67,15 @@ export function etClock(at: Date = new Date()): EtClock {
 }
 
 /** Offset (ms) of ET from UTC at the given instant (negative, e.g. -4h in summer). */
+/**
+ * The ET calendar date an instant falls on. A timestamp's own `2026-09-18T02:32:00Z`
+ * prefix is already tomorrow from 8 PM ET, so comparing that prefix against an ET
+ * date silently loses an evening's worth of rows.
+ */
+export function etDateOf(at: Date | string): string {
+  return etClock(typeof at === 'string' ? new Date(at) : at).date
+}
+
 export function etOffsetMs(at: Date): number {
   const c = etClock(at)
   const asUtc = Date.UTC(

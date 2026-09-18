@@ -1626,11 +1626,13 @@
 @keyframes rt-live { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
 .rt-chip { animation: rt-chip-in 0.32s ease-out both; }
 @keyframes rt-chip-in { from { opacity: 0; transform: translateY(5px) scale(0.96); } to { opacity: 1; transform: none; } }
+.rt-pip-new { animation: rt-pip-in 0.4s ease-out; transform-origin: bottom; }
+@keyframes rt-pip-in { from { transform: scaleY(0.2); opacity: 0.4; } to { transform: scaleY(1); opacity: 1; } }
 .rt-flash { animation: rt-flash 0.9s ease-out; }
 @keyframes rt-flash { from { box-shadow: inset 0 0 0 1px var(--ring), inset 0 0 24px var(--ring-soft); } to { box-shadow: none; } }
 @media (prefers-reduced-motion: reduce) {
   .rt-slide, .rt-tag, .rt-bar, .rt-gauge, .rt-pin, .rt-ring { transition: none; }
-  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new, .rt-gauge-live::after, .rt-live-dot, .rt-chip, .rt-flash { animation: none; }
+  .rt-halo, .rt-ripple, .rt-bead-pop, .rt-riser, .rt-cell-pop, .rt-cell-glow, .rt-fade-in, .rt-word-pop, .rt-row-new, .rt-gauge-live::after, .rt-live-dot, .rt-chip, .rt-pip-new, .rt-flash { animation: none; }
   .rt-halo, .rt-ripple, .rt-riser, .rt-cell-glow { opacity: 0; }
 }
 

@@ -6,7 +6,7 @@ import { cn, clockTime, compactNumber, countdown, money, relTime, signedMoney, u
 import { EmptyState, SectionHead } from '@renderer/components/common/Primitives'
 import { Field, Segmented, Sheet } from '@renderer/components/common/Sheet'
 import { Splitter, usePanelWidth } from '@renderer/components/common/Splitter'
-import { formatEt, nextSessionOpen, sessionLabel, type SessionLabel } from '@shared/marketTime'
+import { etDateOf, formatEt, nextSessionOpen, sessionLabel, type SessionLabel } from '@shared/marketTime'
 import { shortSymbol } from '@shared/tickers'
 import {
   clampRealtimeGuardrails,
@@ -28,6 +28,7 @@ import {
   realtimeUsage,
   sumRealtimeUsage,
   type RealtimeConfig,
+  type RealtimeDecision,
   type RealtimeGuardrails,
   type RealtimeStreamFeed,
   type RealtimeSummary,
@@ -582,6 +583,70 @@ function sessionChange(points: PricePoint[]): number | null {
   return a > 0 ? ((b - a) / a) * 100 : null
 }
 
+/** The last few checks for one symbol as coloured pips, newest on the right. */
+const PIP_N = 18
+const PIP: Record<string, { cls: string; word: string }> = {
+  buy: { cls: 'bg-up', word: 'bought' },
+  sell: { cls: 'bg-down', word: 'sold' },
+  hold: { cls: 'bg-text-3/60', word: 'held' },
+  blocked: { cls: 'bg-warn/70', word: 'refused' },
+  quiet: { cls: 'bg-text-3/20', word: 'not asked' },
+  error: { cls: 'bg-down/40', word: 'failed' }
+}
+
+function pipKind(d: RealtimeDecision): keyof typeof PIP {
+  if (d.fill) return d.fill.side
+  if (d.outcome === 'error') return 'error'
+  if (d.outcome === 'blocked') return 'blocked'
+  if (d.outcome === 'quiet') return 'quiet'
+  return 'hold'
+}
+
+/**
+ * What the agent has been doing in this symbol, without opening it: the last
+ * checks as pips (a fill is a full-height bar in its own colour, a refusal
+ * amber, a check that was not worth asking a faint stub), then today's fills
+ * and what they made.
+ */
+function RowActivity({ s, symbol }: { s: RealtimeSummary; symbol: string }): JSX.Element | null {
+  const pageTicks = useRealtime((x) => x.ticks[s.config.id]) ?? NO_TICKS
+  const ticks = pageTicks.length ? pageTicks : s.state.recent
+  const pips = useMemo(() => {
+    const out: { id: string; kind: keyof typeof PIP; title: string }[] = []
+    for (let i = ticks.length - 1; i >= 0 && out.length < PIP_N; i--) {
+      const d = ticks[i].decisions.find((x) => x.symbol === symbol)
+      if (!d) continue
+      const kind = pipKind(d)
+      out.push({ id: ticks[i].id, kind, title: `${clockTime(ticks[i].at)} · ${PIP[kind].word}${d.fill ? ` ${d.fill.qty} @ ${money(d.fill.price)}` : d.verdict ? ` · ${Math.round((d.verdict.probabilities[d.verdict.action] ?? 0) * 100)}%` : ''}` })
+    }
+    return out.reverse()
+  }, [ticks, symbol])
+  const today = useMemo(() => {
+    const day = s.state.dayDate
+    const fills = day ? s.state.ledger.fills.filter((f) => f.symbol === symbol && etDateOf(f.ts) === day) : []
+    return {
+      buys: fills.filter((f) => f.side === 'buy').length,
+      sells: fills.filter((f) => f.side === 'sell').length,
+      realized: Math.round(fills.reduce((sum, f) => sum + f.realized, 0) * 100) / 100
+    }
+  }, [s.state.ledger.fills, s.state.dayDate, symbol])
+  if (!pips.length) return null
+  const traded = today.buys + today.sells > 0
+  return (
+    <span className="flex items-center gap-2 mt-2">
+      <span className="flex items-end gap-[2px] h-3 shrink-0" title="The last checks in this symbol, newest on the right. A fill is a full bar, a refusal amber, a check that was not worth asking a faint stub.">
+        {pips.map((p, i) => (
+          <span key={`${p.id}:${i}`} title={p.title} className={cn('w-[3px] rounded-[1px]', PIP[p.kind].cls, p.kind === 'quiet' ? 'h-[4px]' : p.kind === 'hold' ? 'h-[7px]' : 'h-3', i === pips.length - 1 && 'rt-pip-new')} />
+        ))}
+      </span>
+      <span className="text-2xs text-text-3 nums truncate">
+        {traded ? `${today.buys} buy${today.buys === 1 ? '' : 's'} · ${today.sells} sell${today.sells === 1 ? '' : 's'} today` : 'no fills today'}
+      </span>
+      {traded && today.realized !== 0 && <span className={cn('text-2xs nums font-medium shrink-0', today.realized > 0 ? 'text-up' : 'text-down')}>{signedMoney(today.realized)}</span>}
+    </span>
+  )
+}
+
 function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary; symbol: string; points: PricePoint[]; active: boolean; onSelect: () => void }): JSX.Element {
   const { config, state } = s
   const last = points[points.length - 1]?.p ?? state.lastQuotes[symbol] ?? null
@@ -591,41 +656,47 @@ function WatchRow({ s, symbol, points, active, onSelect }: { s: RealtimeSummary;
   const running = config.status === 'running'
   const tone: 'up' | 'down' | 'muted' = change === null ? 'muted' : change >= 0 ? 'up' : 'down'
   return (
-    <button type="button" onClick={onSelect} aria-current={active ? 'true' : undefined} className={cn('w-full flex items-center gap-3 px-3 py-2.5 text-left rounded-lg', active ? 'bg-surface-2' : 'hover:bg-surface-2/60')}>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="mono text-base font-semibold tracking-[-0.01em]">{symbol}</span>
-          {!running && <span className="pill">Paused</span>}
-          {state.buyLocked && <span className="pill pill-warn">Locked</span>}
+    <button type="button" onClick={onSelect} aria-current={active ? 'true' : undefined} className={cn('w-full block px-3 py-2.5 text-left rounded-lg', active ? 'bg-surface-2' : 'hover:bg-surface-2/60')}>
+      <span className="flex items-start gap-3">
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="mono text-base font-semibold tracking-[-0.01em]">{symbol}</span>
+            {!running && <span className="pill">Paused</span>}
+            {state.buyLocked && <span className="pill pill-warn">Locked</span>}
+          </span>
+          <span className="block text-xs text-muted truncate mt-0.5">
+            {position ? (
+              <>
+                long {position.qty} @ {money(position.avgCost)}
+                {upnl !== null && <span className={cn('ml-1.5 font-medium', upnl >= 0 ? 'text-up' : 'text-down')}>{signedMoney(upnl)}</span>}
+              </>
+            ) : (
+              `${REALTIME_ASSET_CLASS_LABEL[kindOf(config)]} · ${money(config.allocation, 0)} paper · every ${config.intervalSec}s${config.name !== symbol ? ` · ${config.name}` : ''}`
+            )}
+          </span>
         </span>
-        <span className="block text-xs text-muted truncate mt-0.5">
-          {position ? (
-            <>
-              long {position.qty} @ {money(position.avgCost)}
-              {upnl !== null && <span className={cn('ml-1.5 font-medium', upnl >= 0 ? 'text-up' : 'text-down')}>{signedMoney(upnl)}</span>}
-            </>
-          ) : (
-            `${REALTIME_ASSET_CLASS_LABEL[kindOf(config)]} · ${money(config.allocation, 0)} paper · every ${config.intervalSec}s${config.name !== symbol ? ` · ${config.name}` : ''}`
-          )}
+        <span className="pt-0.5">
+          <Sparkline points={points} tone={tone} />
         </span>
-      </span>
-      <Sparkline points={points} tone={tone} />
-      <span className="text-right shrink-0 w-[72px]">
-        <span className="block mono text-sm nums">{last !== null ? money(last) : '—'}</span>
-        <span className={cn('inline-block mt-0.5 rounded px-1.5 py-px text-2xs nums font-medium', change === null ? 'text-text-3' : change >= 0 ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>
+        <span className="text-right shrink-0 w-[72px] pt-0.5">
+          <span className="block mono text-sm nums">{last !== null ? money(last) : '—'}</span>
+          <span className={cn('inline-block mt-0.5 rounded px-1.5 py-px text-2xs nums font-medium', change === null ? 'text-text-3' : change >= 0 ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>
           {change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}
+          </span>
         </span>
       </span>
+      <RowActivity s={s} symbol={symbol} />
     </button>
   )
 }
 
 function WatchList({ rows, active, onSelect, onNew, width }: { rows: { s: RealtimeSummary; symbol: string }[]; active: WatchKey | null; onSelect: (k: WatchKey) => void; onNew: () => void; width: number }): JSX.Element {
   const samples = useRealtime((x) => x.samples)
-  const held = rows.filter((r) => r.s.state.ledger.positions.some((p) => p.symbol === r.symbol))
-  const flat = rows.filter((r) => !held.includes(r))
-  const stocks = flat.filter((r) => kindOf(r.s.config) === 'stocks')
-  const crypto = flat.filter((r) => kindOf(r.s.config) === 'crypto')
+  // Grouped by what they trade and nothing else: a name that is held keeps
+  // its place in the list (the row itself says it is long) instead of jumping
+  // to the top and back the moment a position opens or closes.
+  const stocks = rows.filter((r) => kindOf(r.s.config) === 'stocks')
+  const crypto = rows.filter((r) => kindOf(r.s.config) === 'crypto')
   const section = (title: string, list: typeof rows): JSX.Element | null =>
     list.length ? (
       <div className="mb-3">
@@ -642,7 +713,6 @@ function WatchList({ rows, active, onSelect, onNew, width }: { rows: { s: Realti
           <EmptyState icon={<Activity size={18} />} title="Nothing watched yet" body="Pick a ticker, a paper allocation and a cadence. The model answers up, down or flat on every check; the engine enforces the stops." action={<button className="btn btn-primary btn-sm" onClick={onNew}>Watch a stock</button>} />
         ) : (
           <>
-            {section('Positions', held)}
             {section('Stocks', stocks)}
             {section('Crypto', crypto)}
           </>
@@ -675,7 +745,7 @@ function Dashboard({ s, symbol, clock, onEdit }: { s: RealtimeSummary; symbol: s
   const latencies = useMemo(() => ticks.map((t) => t.latencyMs).filter((n): n is number => typeof n === 'number'), [ticks])
   const lastLat = latencies.length ? latencies[latencies.length - 1] : null
   const avgLat = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null
-  const fillsToday = state.ledger.fills.filter((f) => f.ts.slice(0, 10) === (state.dayDate ?? '')).length
+  const fillsToday = state.ledger.fills.filter((f) => etDateOf(f.ts) === (state.dayDate ?? '')).length
   const firstToday = ticks.find((t) => t.at.slice(0, 10) === state.dayDate)?.at ?? null
   // The newest decision for this symbol, and the newest one the model
   // actually answered — on a quiet tick they differ, and the panel says so.

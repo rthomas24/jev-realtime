@@ -17,11 +17,15 @@ import { normSymbols, type Bar, type BarInterval, type PriceFeed } from './feed'
  * wire format and a second set of symbols for the same numbers; Binance is
  * geo-fenced; CoinGecko is polled, minutes old, on a small daily quota.
  *
- * Crypto trades around the clock: nothing here knows a session, and a price
- * is fresh when the exchange has one — a thin pair may not print for
- * minutes, and its last print is still its price. Alpaca's daily bars roll
- * at midnight UTC, so `prevClose` is the prior UTC day's close, which the
- * situation names as such.
+ * Crypto trades around the clock: nothing here knows a session. The
+ * location is `us-1` (Kraken US data via Alpaca), not Alpaca's own venue
+ * (`us`): measured 2026-09-17, `us` printed 32 BTC trades in a day and its
+ * last trade was minutes old while `us-1` printed 5,500 with the last one a
+ * second old — a tape a one-second agent can read. Both are keyless. Even
+ * so a thin pair may not print for a while, so a two-sided quote newer than
+ * the last trade marks the pair at its mid (`markAtMid`) and the price
+ * moves with the book. Alpaca's daily bars roll at midnight UTC, so
+ * `prevClose` is the prior UTC day's close, which the situation names as such.
  *
  * Node-free: plain `fetch`, injectable for tests.
  */
@@ -36,7 +40,9 @@ export interface AlpacaCryptoFeedOptions {
 }
 
 const DEFAULT_BASE = 'https://data.alpaca.markets'
-const LOC = 'us'
+/** Kraken-backed location: see the header. The stream uses the same one (`alpacaStreamUrl('crypto')`). */
+export const CRYPTO_LOC = 'us-1'
+const LOC = CRYPTO_LOC
 const SNAPSHOT_CHUNK = 100
 /**
  * A quote younger than this is served from memory. Two seconds, not the
@@ -91,7 +97,7 @@ export function alpacaCryptoFeed(opts: AlpacaCryptoFeedOptions = {}): PriceFeed 
         const data = await get<{ snapshots?: Record<string, AlpacaSnapshot> }>('/snapshots', { symbols: chunk.join(',') })
         for (const [sym, snap] of Object.entries(data.snapshots ?? {})) {
           const symbol = sym.toUpperCase()
-          const q = snap ? alpacaSnapshotToQuote(symbol, snap, at) : null
+          const q = snap ? alpacaSnapshotToQuote(symbol, snap, at, { markAtMid: true }) : null
           if (!q) continue
           quotes.push(q)
           cache.set(symbol, { at, quote: q })

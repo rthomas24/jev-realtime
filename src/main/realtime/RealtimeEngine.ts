@@ -358,12 +358,12 @@ class RealtimeEngine {
           log: (level, msg) => log(level, `realtime stream ${cls}`, msg),
           events: {
             trade: (symbol, t) => {
-              this.tape(symbol).trade(t)
+              this.tape(symbol, cls).trade(t)
               this.legs[cls].trades += 1
               this.legs[cls].lastMessageAt = new Date().toISOString()
             },
             quote: (symbol, q) => {
-              this.tape(symbol).setQuote(q)
+              this.tape(symbol, cls).setQuote(q)
               this.legs[cls].lastMessageAt = new Date().toISOString()
             },
             state: (state, detail) => this.setLegState(cls, state, detail)
@@ -373,10 +373,11 @@ class RealtimeEngine {
       this.streams[cls]!.subscribe(symbols)
     }
   }
-  private tape(symbol: string): SymbolTape {
+  /** The tape for one symbol; a crypto tape marks at the mid when the book is newer than the last print. */
+  private tape(symbol: string, cls: AssetClass): SymbolTape {
     let t = this.tapes.get(symbol)
     if (!t) {
-      t = new SymbolTape(symbol)
+      t = new SymbolTape(symbol, { markAtMid: cls === 'crypto' })
       this.tapes.set(symbol, t)
     }
     return t

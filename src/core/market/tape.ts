@@ -57,7 +57,16 @@ export class SymbolTape {
   /** Buyer/seller shares per trade, decided against the quote in force when it printed. */
   private sides: ('buy' | 'sell' | null)[] = []
 
-  constructor(readonly symbol: string) {}
+  /**
+   * `markAtMid` (crypto): a two-sided quote NEWER than the last print marks
+   * the symbol at its mid. A thin pair's last print can be minutes old while
+   * its book moves every second; a stock in session prints constantly, so
+   * its last print stays its price.
+   */
+  constructor(
+    readonly symbol: string,
+    private readonly opts: { markAtMid?: boolean } = {}
+  ) {}
 
   trade(t: TapeTrade): void {
     if (!(t.p > 0) || !(t.s >= 0)) return
@@ -93,7 +102,9 @@ export class SymbolTape {
     const last = this.lastTrade
     const q = this.quote
     if (!last && !q) return null
-    const lastPx = last?.p ?? (q && q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : (q?.bid || q?.ask) ?? 0)
+    const twoSided = q !== null && q.bid > 0 && q.ask >= q.bid
+    const useMid = twoSided && (!last || (this.opts.markAtMid === true && q!.t > last.t))
+    const lastPx = useMid ? (q!.bid + q!.ask) / 2 : (last?.p ?? (q?.bid || q?.ask) ?? 0)
     if (!(lastPx > 0)) return null
     const ret = (ms: number): number | null => {
       const target = now - ms
@@ -121,7 +132,7 @@ export class SymbolTape {
     return {
       symbol: this.symbol,
       last: lastPx,
-      lastTradeAt: last?.t ?? q!.t,
+      lastTradeAt: useMid ? q!.t : (last?.t ?? q!.t),
       bid: q && q.bid > 0 ? q.bid : null,
       ask: q && q.ask > 0 ? q.ask : null,
       bidSize: q ? q.bidSize : null,

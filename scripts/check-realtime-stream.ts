@@ -36,7 +36,7 @@ console.log('— the wire —')
   check('malformed frames yield nothing rather than throwing', parseAlpacaMessages('{not json').length === 0 && parseAlpacaMessages('null').length === 0)
   check('a single object frame is accepted too', parseAlpacaMessages(JSON.stringify({ T: 'success', msg: 'connected' }))[0]?.kind === 'connected')
   check('the feed picks the url', alpacaStreamUrl('iex') === 'wss://stream.data.alpaca.markets/v2/iex' && alpacaStreamUrl('test') === 'wss://stream.data.alpaca.markets/v2/test')
-  check('crypto has its own socket', alpacaStreamUrl('crypto') === 'wss://stream.data.alpaca.markets/v1beta3/crypto/us')
+  check('crypto has its own socket, on the Kraken-backed location', alpacaStreamUrl('crypto') === 'wss://stream.data.alpaca.markets/v1beta3/crypto/us-1')
   // The crypto socket's frames: the same shape, a pair for a symbol, a taker side on the trade, fractional sizes.
   const cryptoFrame = JSON.stringify([
     { T: 't', S: 'BTC/USD', p: 76527.1, s: 0.000083, t: '2026-09-18T01:24:19.550166609Z', i: 8012479237256725631, tks: 'S' },
@@ -84,6 +84,19 @@ console.log('\n— the tape —')
   const quoteOnly = new SymbolTape('Q')
   quoteOnly.setQuote({ t: t0, bid: 10, ask: 10.02, bidSize: 1, askSize: 1 })
   check('a quote with no print yet reads as the mid', quoteOnly.snapshot(t0)!.last === 10.01)
+
+  // A thin crypto pair: one print, then the book keeps moving. The stock rule keeps the print; the crypto rule follows the mid.
+  const stock = new SymbolTape('X')
+  const coin = new SymbolTape('BTC/USD', { markAtMid: true })
+  for (const tp of [stock, coin]) {
+    tp.setQuote({ t: t0 - 5000, bid: 99.9, ask: 100.1, bidSize: 1, askSize: 1 })
+    tp.trade({ t: t0 - 4000, p: 100, s: 1 })
+    tp.setQuote({ t: t0 - 1000, bid: 100.4, ask: 100.6, bidSize: 1, askSize: 1 })
+  }
+  check('a stock stays at its last print while the book moves', stock.snapshot(t0)!.last === 100 && stock.snapshot(t0)!.lastTradeAt === t0 - 4000)
+  check('a crypto tape marks at the mid of a quote newer than the last print', Math.abs(coin.snapshot(t0)!.last - 100.5) < 1e-9 && coin.snapshot(t0)!.lastTradeAt === t0 - 1000, `${coin.snapshot(t0)!.last}`)
+  coin.trade({ t: t0 - 500, p: 100.55, s: 1 })
+  check('and goes back to the print once one is newer than the quote', coin.snapshot(t0)!.last === 100.55)
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nall ok')

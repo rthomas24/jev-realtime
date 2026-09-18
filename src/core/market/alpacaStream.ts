@@ -80,7 +80,8 @@ export function alpacaErrorIsFatal(code: number): boolean {
 }
 
 export function alpacaStreamUrl(feed: AlpacaFeed): string {
-  return feed === 'crypto' ? 'wss://stream.data.alpaca.markets/v1beta3/crypto/us' : `wss://stream.data.alpaca.markets/v2/${feed}`
+  // `us-1`: the Kraken-backed crypto location, the same one the polled feed reads (see `alpacaCrypto.ts`).
+  return feed === 'crypto' ? 'wss://stream.data.alpaca.markets/v1beta3/crypto/us-1' : `wss://stream.data.alpaca.markets/v2/${feed}`
 }
 
 const BACKOFF_MIN_MS = 1_000
